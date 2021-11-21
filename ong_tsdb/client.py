@@ -1,11 +1,11 @@
 import time
 import zlib
-import pickle
 import msgpack
+import base64
 import pandas as pd
 import ujson
 import urllib3
-from ong_tsdb import config, logger, LOCAL_TZ
+from ong_tsdb import config, logger, LOCAL_TZ, DTYPE
 from ong_tsdb.code.database import OngTSDB
 from urllib3.exceptions import MaxRetryError, TimeoutError, ConnectionError
 from ong_utils.timers import OngTimer
@@ -37,7 +37,7 @@ class OngTsdbClient:
 
     def __init__(self, url:str, port, token:str):
         """
-        Initalizes client
+        Initializes client
         :param url: url of the ong_tsdb client. If empty or none, http://localhost will be used
         :param port: port of the ong_tsdb client
         :param token: the token to use for communication
@@ -157,6 +157,19 @@ class OngTsdbClient:
         else:
             return False
 
+    def write_df(self, db: str, sensor: str, df) -> bool:
+        """Writes a pandas dataframe into a certain database and sensor.
+        Pandas data frame must be indexed by dates and have metrics/measurements as columns"""
+        # Check index
+        pass
+        # Generate a sequence out of the given data
+        sequence = []
+        for idx, row in df.iterrows():
+            sequence.append((db, sensor, list(row.index), list(row.values), idx.value))
+
+        return self.write(sequence)
+
+
     def config_reload(self):
         """Forces a config reload of server (e.g. for manually modifying sensors)"""
         return self._post(self._make_url("/config_reload"))
@@ -178,9 +191,10 @@ class OngTsdbClient:
         success, json = self._post_retval(self._make_url(f"/{db}/{sensor}/search"))
         return json if success else None
 
-    def read(self, db, sensor, date_from, date_to=None, metrics=None):
+    def read_grafana(self, db, sensor, date_from, date_to=None, metrics=None) -> pd.DataFrame:
         """
-        Reads data from db and returns it as a pandas dataframe
+        Reads data from db and returns it as a pandas dataframe, using grafana endpoints.
+        This is much slower than read, so it should not be used
         :param db: name of db
         :param sensor: name of sensor
         :param date_from: date (datetime alike object) from which data will be read
@@ -209,7 +223,7 @@ class OngTsdbClient:
         df = pd.DataFrame(np.array(dp_val).T, columns=targets, index=dp_idx[0])
         return df
 
-    def local_read(self, db, sensor, date_from, date_to=None, metrics=None):
+    def local_read(self, db, sensor, date_from, date_to=None, metrics=None) -> pd.DataFrame:
         """
         Reads data from db and returns it as a pandas dataframe. Reads it from a local database not using server,
         so it won't work if database is not hosted in localhost
@@ -229,7 +243,7 @@ class OngTsdbClient:
             df = df.loc[:, metrics]
         return df
 
-    def read_df(self, db, sensor, date_from, date_to=None, metrics=None):
+    def read(self, db, sensor, date_from, date_to=None, metrics=None) -> pd.DataFrame:
         """
         Reads data from db and returns it as a pandas dataframe. Reads it from a local database not using server,
         so it won't work if database is not hosted in localhost
@@ -241,13 +255,51 @@ class OngTsdbClient:
         :param metrics: list of metrics to read (all metrics if not given)
         :return: a pandas dataframe
         """
-        _db = OngTSDB()
+        #_db = OngTSDB()
         end_ts = date_to.timestamp() if date_to else None
+        #metrics = ",".join(metrics) if metrics else None
 
-        resp = self._request(self._make_url(f"/{db}/{sensor}/{date_from.timestamp()}/{end_ts}/{metrics}"))
-        if resp is None:
+        body = ujson.dumps(dict(
+            start_ts=date_from.timestamp(),
+            end_ts=end_ts,
+        ))
+
+        # resp = self._request("post", self._make_url(f"/{db}/{sensor}/read_df"), body=body)
+        # success = resp is not None
+        # if not success:
+        #     return None
+        #
+        # metrics_db = self.get_metrics(db, sensor)
+        # dates_len = int(len(resp.data) / (len(metrics_db) + 2) / np.dtype(DTYPE).itemsize * np.dtype(np.float64).itemsize)
+        # dates = np.frombuffer(resp.data[:dates_len])
+        # values = np.frombuffer(resp.data[dates_len:], dtype=DTYPE)
+
+        # resp = self._request("post", self._make_url(f"/{db}/{sensor}/read_df"), body=body)
+        # metrics_db = self.get_metrics(db, sensor)
+        # bts = base64.decodebytes(resp.data)
+        # dates_len = int(
+        #     len(bts) / (len(metrics_db) + 2) / np.dtype(DTYPE).itemsize * np.dtype(np.float64).itemsize)
+        # # len of dates is the key of the json, value contains concatenated bytes of dates and values
+        # # bts = base64.decodebytes(js_resp[str(dates_len)].encode())
+        # dates = np.frombuffer(bts[:dates_len])
+        # values = np.frombuffer(bts[dates_len:], dtype=DTYPE)
+
+        success, js_resp = self._post_retval(self._make_url(f"/{db}/{sensor}/read_df"), body=body)
+        # len of dates is the key of the json, value contains concatenated bytes of dates and values
+        if not success:
             return None
-        df = msgpack.loads(resp.data)
+        metrics_db = js_resp.pop("metrics").split(",")
+        dates_len = int(next(iter(js_resp.keys())))
+        bts = base64.decodebytes(js_resp[str(dates_len)].encode())
+        dates = np.frombuffer(bts[:dates_len])
+        values = np.frombuffer(bts[dates_len:], dtype=DTYPE)
+        # metrics_db = self.get_metrics(db, sensor)
+
+        values.shape = len(dates), int(values.shape[0] / len(dates))
+        dateindex = pd.to_datetime(dates, unit='s', utc=True).tz_convert(LOCAL_TZ)
+        df = pd.DataFrame(values, index=dateindex, columns=metrics_db)
+        if metrics is not None:
+            df = df.loc[:, metrics]
         return df
 
 

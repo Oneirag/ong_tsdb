@@ -2,6 +2,7 @@ import time
 from unittest import TestCase
 
 import pandas as pd
+import numpy as np
 
 from ong_tsdb import config, LOCAL_TZ
 from ong_tsdb.client import OngTsdbClient
@@ -25,7 +26,7 @@ class TestOngTsdbClient(TestCase):
     admin_key = config("admin_token")
     write_key = config("write_token")
     read_key = config("read_token")
-    sensor_freqs = "1s", "1h", "1d"
+    sensor_freqs = "1s", "1h", "1d", "15m"
 
     def setUp(self) -> None:
         """Deletes previous versions of databases and creates a new structure for TEST database"""
@@ -84,21 +85,24 @@ class TestOngTsdbClient(TestCase):
         self.assertEqual(len(df_local.index), len(df.index), "Local client index is not correct")
         self.assertTrue((df == df_local).all().all(), "Local client df values are not correct")
         print(df)
-        self.assertEqual(len(df.index), len(timestamps), "Length of the data read does not match the written data")
         for idx, (df_ts, ts) in enumerate(zip(df.index, reversed(timestamps))):
             # if df_ts.timestamp() != ts.timestamp():
             self.assertEqual(df_ts.timestamp(), ts.timestamp(),
                              f"Written data ts {ts} does not correspond to read data ts {df_ts} in {idx=}")
+        self.assertEqual(len(df.index), len(timestamps), "Length of the data read does not match the written data")
 
         self.assertEqual(len(timestamps), df.shape[0], "Not all ticks have been read")
         # read using client
         db_metrics = self.read_client.get_metrics(DB_TEST, sensor_name)
         db_metrics = None
+
+        # Several methods for reading data to check speeds and proper functioning
         timer.tic("Reading from read")
         df_client = self.read_client.read(DB_TEST, sensor_name, min(timestamps), metrics=db_metrics)
         timer.toc("Reading from read")
         self.assertEqual(len(df_client.index), len(df.index), "Client index length is not correct")
         self.assertTrue((df == df_client).all().all(), "Client df values are not correct")
+
         pass
 
     def test_write_data1h_sensor1h(self):
@@ -123,7 +127,27 @@ class TestOngTsdbClient(TestCase):
 
     def test_read_data1d_sensor1s(self):
         """Tests writing 10k data and read it to see different speeds"""
+        #self.write_ts(n_periods=12, data_freq="-80min", sensor_name=get_sensor_name("1s"))
+        #self.write_ts(n_periods=40, data_freq="-350min", sensor_name=get_sensor_name("1s"))
+        #self.write_ts(n_periods=50, data_freq="-250min", sensor_name=get_sensor_name("1s"))
         self.write_ts(n_periods=10000, data_freq="-10min", sensor_name=get_sensor_name("1s"))
+
+    def test_write_df(self):
+        """Test writing data as a pandas dataframe"""
+        n_points = 10
+        metrics = ['una', 'dos', 'tres']
+        freq = "15m"
+        self.assertIn(freq, self.sensor_freqs, "Invalid frequency")
+        freq_pandas = "15T"
+        start_t = pd.Timestamp(2021, 10, 10).tz_localize(LOCAL_TZ)
+        df = pd.DataFrame(np.ones((n_points, len(metrics))), columns=metrics,
+                          index=pd.date_range(start=start_t, periods=n_points, freq="-" + freq_pandas)).sort_index()
+        success = self.write_client.write_df(DB_TEST, get_sensor_name(freq), df)
+        self.assertTrue(success, "Error writing data")
+        df2 = self.read_client.read(DB_TEST, get_sensor_name(freq), df.index.min(), metrics=df.columns)
+        self.assertSequenceEqual(df.shape, df2.shape, "Data writen and data read don't have the same shape")
+        self.assertSequenceEqual(list(df.index), list(df2.index), "Data writen and data read don't have the same index")
+        self.assertTrue((df == df2).all().all(), "Data writen and data read are not the same")
 
     def tearDown(self) -> None:
         """Deletes Test Database"""

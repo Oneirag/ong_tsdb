@@ -10,10 +10,11 @@ import os
 import re
 import grp
 import gzip
+import bz2
 from pwd import getpwnam
 import stat
 import numpy as np
-from ong_tsdb import config, BASE_DIR, COMPRESSION_EXT, logger
+from ong_tsdb import config, BASE_DIR, COMPRESSION_EXT, logger, DTYPE, CHUNK_ROWS
 from pprint import pprint
 
 
@@ -202,12 +203,11 @@ class FileUtils(object):
         os.fchown(fdesc, self.userid, self.groupid)
         return os.fdopen(fdesc, mode)
 
-    def __verify_chunk_content(self, filename, dtype=np.float64, print_summary_stats=True):
+    def __verify_chunk_content(self, filename, dtype=DTYPE, print_summary_stats=True):
         """Prints to screen the analysis of the chunk file filename"""
-        from ong_tsdb.code.chunker import get_num_rows
         arr = self.fast_read_np(filename, dtype=dtype)
-        if arr.shape[0] != get_num_rows():
-            logger.error(f"Error in {filename}: expected {get_num_rows()}rows but file has {arr.shape[0]}")
+        if arr.shape[0] != CHUNK_ROWS:
+            logger.error(f"Error in {filename}: expected {CHUNK_ROWS} rows but file has {arr.shape[0]}")
         index = arr[:, 0].nonzero()[0]
         min_index = index[0] if len(index) > 0 else -1
         max_index = index[-1] if len(index) > 0 else -1
@@ -222,7 +222,7 @@ class FileUtils(object):
             pprint(stat)
         return stat
 
-    def verify_all_chunks(self, filter_db_name=None, dtype=np.float64, print_per_chunk_data=True):
+    def verify_all_chunks(self, filter_db_name=None, dtype=DTYPE, print_per_chunk_data=True):
         """Gives some statistics on the chunks of a certain DB (or all if not db_name)"""
         total_data = 0
         for db_name in self.getdbs():
@@ -251,11 +251,12 @@ class FileUtils(object):
     def get_open_func(self, filename):
         """Returns function to open file. If file is compressed uses gzip.open else uses standard open"""
         if filename.endswith(COMPRESSION_EXT):
+            # return bz2.open
             return gzip.open
         else:
             return open
 
-    def fast_read_np(self, filename, shape=None, dtype=np.float64):
+    def fast_read_np(self, filename, shape=None, dtype=DTYPE):
         """Reads a chunk file into a numpy array"""
         if not os.path.isfile(filename):
             return None

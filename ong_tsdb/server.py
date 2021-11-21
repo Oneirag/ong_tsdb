@@ -7,11 +7,13 @@ if sys.gettrace() is None:
 
 import zlib
 from functools import wraps
+import io
+from base64 import encodebytes
 
 import msgpack
 import numpy as np
 import pandas as pd
-from flask import Flask, jsonify, request, stream_with_context
+from flask import Flask, jsonify, request, stream_with_context, send_file
 from gevent.pywsgi import WSGIServer
 from werkzeug.exceptions import HTTPException, Unauthorized
 
@@ -203,24 +205,41 @@ def get_lasttimestamp(db_name, sensor_name, key):
     return jsonify(dict(last_timestamp=_db.getlasttimestamp(key, db_name, sensor_name)))
 
 
-@app.route("/<db_name>/<sensor_name>/<float:start_ts>/<float:end_ts>/<string:metrics>", methods=["GET"])
+@app.route("/<db_name>/<sensor_name>/read_df", methods=["post"])
 @auth_required
-def read_df(db_name, sensor_name, start_ts, end_ts=None, metrics=None, key=None):
+def read_df(db_name, sensor_name, key=None):
     """
-    Read data in a dataframe
+    Read data in a dataframe. Receives a json payload with "start_ts" and "end_ts" as keys
     :param db_name: name of db
     :param sensor_name: name of sensor
-    :param start_ts: timestamp (millis) of date start
-    :param end_ts: timestamp (millis) of date end (by default None which means now)
-    :param metrics: coma separated list of metrics to recover. If empty, all metrics are read
     :param key: token for reading
     :return: a dataframe turned into bytes
     """
-    data = _db.read(key, db_name, sensor_name, start_ts=start_ts, end_ts=end_ts)
-    df = _db.np2pd(key, db_name, sensor_name, data[0], data[1])
-    if metrics:
-        df = df.loc[:, metrics.split(",")]
-    return msgpack.dumps(df)
+    payload = request.json
+    start_ts = payload['start_ts']
+    end_ts = payload.get('end_ts', None)
+
+    dates, values = _db.read(key, db_name, sensor_name, start_ts=start_ts, end_ts=end_ts)
+
+    if dates is not None:
+
+        # buff = io.BytesIO()
+        # buff.write(dates.tobytes())
+        # buff.write(values.tobytes())
+        # buff.seek(0)
+        # return send_file(buff, download_name=str(len(dates)))
+        bytes_dates = dates.tobytes()
+        bytes_values = values.tobytes()
+        encoded_numpy = encodebytes(bytes_dates + bytes_values) #.decode()
+        metrics = _db.getmetrics(key, db_name, sensor_name)
+        # return encoded_numpy and the list of metrics
+        retval = {
+            str(len(bytes_dates)): encoded_numpy.decode(),
+            "metrics": ",".join(metrics)
+        }
+        return retval
+    else:
+        return make_js_response("No data", 404)
 
 
 #########################################

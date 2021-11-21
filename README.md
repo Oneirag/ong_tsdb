@@ -51,7 +51,7 @@ ong_tsdb:
     admin_token: whatever_you_want_here 
     read_token: whatever_you_want_here
     write_token: whatever_you_want_here
-    uncompressed_chunks: 10         # number of files to remain uncompressed
+    uncompressed_chunks: 10         # number of files to remain uncompressed. Use -1 to disable compression
 ```
 
 
@@ -99,7 +99,11 @@ ts = pd.Timestamp.now().value
 sequence_str = f"my_db,sensor=my_sensor measurement1=123,measurement2=34.4 {ts}"
 sequence_list = [("my_db", "my_sensor", ["measurement1", "measurement2"], [123, 34.4], ts)]
 write_client.write(sequence_str)
-write_client.write(sequence_list)       # These are equivalent
+write_client.write(sequence_list)       # Same but with a list
+import pandas as pd
+df = pd.DataFrame([[123, 34.4]], index=[pd.Timestamp.utcfromtimestamp(ts/1e9)], 
+                  columns=["measurement1", "measurement2"])
+write_client.write_df("my_db", "my_sensor", df)       # Same with pandas dataframe
 
 
 ```
