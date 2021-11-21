@@ -229,6 +229,27 @@ class OngTsdbClient:
             df = df.loc[:, metrics]
         return df
 
+    def read_df(self, db, sensor, date_from, date_to=None, metrics=None):
+        """
+        Reads data from db and returns it as a pandas dataframe. Reads it from a local database not using server,
+        so it won't work if database is not hosted in localhost
+        :param db: name of db
+        :param sensor: name of sensor
+        :param date_from: date (datetime alike object) from which data will be read
+        :param date_to: date (datetime alike object) up to which data will be read
+        (optional, now would be used if not given)
+        :param metrics: list of metrics to read (all metrics if not given)
+        :return: a pandas dataframe
+        """
+        _db = OngTSDB()
+        end_ts = date_to.timestamp() if date_to else None
+
+        resp = self._request(self._make_url(f"/{db}/{sensor}/{date_from.timestamp()}/{end_ts}/{metrics}"))
+        if resp is None:
+            return None
+        df = msgpack.loads(resp.data)
+        return df
+
 
 if __name__ == '__main__':
     client = OngTsdbClient(url=config('url'), port=config('port'), token=config('admin_token'))

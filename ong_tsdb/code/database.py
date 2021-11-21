@@ -309,7 +309,7 @@ class OngTSDB(object):
         with self._lock:
             if not os.path.isfile(chunk_name):
                 f = self.FU.safe_createfile(chunk_name, 'wb+')
-                f.write(bytes(chunker.nticks_per_chunk * bytes_chunk_record))
+                f.write(bytes(chunker.n_rows_per_chunk * bytes_chunk_record))
                 f.seek(0)
             else:
                 f = open(chunk_name, 'rb+')
@@ -359,12 +359,12 @@ class OngTSDB(object):
         with self._lock:
             if not os.path.isfile(chunk_name):
                 f = self.FU.safe_createfile(chunk_name, 'wb+')
-                value_write = np.zeros((chunker.nticks_per_chunk, cols_chunk_array), dtype=np_values.dtype)
+                value_write = np.zeros((chunker.n_rows_per_chunk, cols_chunk_array), dtype=np_values.dtype)
             else:
                 # Open for read only
                 f = self.FU.get_open_func(chunk_name)(chunk_name, 'rb')
                 value_write = np.fromstring(f.read(), dtype=np_values.dtype)
-                value_write.shape = (chunker.nticks_per_chunk, cols_chunk_array)
+                value_write.shape = (chunker.n_rows_per_chunk, cols_chunk_array)
                 f.close()
                 # Reopen for writing
                 f = self.FU.get_open_func(chunk_name)(chunk_name, 'wb')
@@ -473,7 +473,7 @@ class OngTSDB(object):
         SHAPE = chunker.np_shape(len(self.getmetrics(key, db, sensor)))
 
         # As a default, read current chunk (the one corresponding to current time
-        start_ts = start_ts or chunker.init_date(time.time())
+        start_ts = start_ts or chunker.chunk_timestamp(time.time())
         end_ts = end_ts or time.time()
         chunk = start_ts
         now = repr(time.time())
@@ -498,8 +498,8 @@ class OngTSDB(object):
 
         while True:
             #            chunker = self.getchunker(key, db, sensor)
-            chunk_ts = chunker.init_date(chunk)
-            is_last_chunk = chunk_ts == chunker.init_date(end_ts)
+            chunk_ts = chunker.chunk_timestamp(chunk)
+            is_last_chunk = chunk_ts == chunker.chunk_timestamp(end_ts)
             #           o.tic()
             #            file_name = self.FU.path(db, sensor, chunker.chunk_name(chunk))
             file_name = self.get_FU_path(db, sensor, chunker.chunk_name(chunk, SHAPE[1]))
@@ -517,13 +517,13 @@ class OngTSDB(object):
             cache.data_available = False
             if not is_last_chunk:
                 start_new_thread(cache_read, (cache, next_file_name, start_ts,
-                                              end_ts, SHAPE, is_last_chunk, chunker.init_date(chunk),
+                                              end_ts, SHAPE, is_last_chunk, chunker.chunk_timestamp(chunk),
                                               chunker.tick_duration))
 
             #            o.toc("read chunk")
             if new_dates is not None:
                 yield new_dates, new_values, chunker.tick_duration
-            if chunker.init_date(chunk) > end_ts:
+            if chunker.chunk_timestamp(chunk) > end_ts:
                 break
         del (self.cache[now])
 

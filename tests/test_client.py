@@ -6,8 +6,10 @@ import pandas as pd
 from ong_tsdb import config, LOCAL_TZ
 from ong_tsdb.client import OngTsdbClient
 from ong_tsdb.code.database import OngTSDB
+from ong_utils import OngTimer
 
 DB_TEST = "testing_database"
+timer = OngTimer()
 
 
 def get_sensor_name(freq):
@@ -16,9 +18,10 @@ def get_sensor_name(freq):
 
 class TestOngTsdbClient(TestCase):
     _db = OngTSDB()
-    admin_client = OngTsdbClient(url=config('url'), port=config('port'), token=config('admin_token'))
-    read_client = OngTsdbClient(url=config('url'), port=config('port'), token=config('read_token'))
-    write_client = OngTsdbClient(url=config('url'), port=config('port'), token=config('write_token'))
+    port = config('test_port', config('port'))
+    admin_client = OngTsdbClient(url=config('url'), port=port, token=config('admin_token'))
+    read_client = OngTsdbClient(url=config('url'), port=port, token=config('read_token'))
+    write_client = OngTsdbClient(url=config('url'), port=port, token=config('write_token'))
     admin_key = config("admin_token")
     write_key = config("write_token")
     read_key = config("read_token")
@@ -66,25 +69,34 @@ class TestOngTsdbClient(TestCase):
             value_to_write.append(sequence[i].format(DB_TEST=DB_TEST, sensor_name=sensor_name, ts=ts))
 
         success = self.write_client.write(value_to_write)
-        self.assertTrue(success, f"Error writing: '{value_to_write}'")
-        print(f"Written OK: '{value_to_write}'")
+        self.assertTrue(success, f"Error writing: {value_to_write}")
+        print(f"Written OK: {value_to_write[:1000]}")
         self._db.config_reload()
-        self._db.FU.verify_all_chunks(filter_db_name=DB_TEST)
+        self._db.FU.verify_all_chunks(filter_db_name=DB_TEST, print_per_chunk_data=len(timestamps) < 100)
         start_ts = min(timestamps).timestamp()
+        timer.tic("Reading directly from db")
         data = self._db.read(self.read_key, DB_TEST, sensor_name, start_ts=start_ts)
         df = self._db.np2pd(self.read_key, DB_TEST, sensor_name, data[0], data[1])
+        timer.toc("Reading directly from db")
+        timer.tic("Reading from local_read")
         df_local = self.read_client.local_read(DB_TEST, sensor_name, min(timestamps))
+        timer.toc("Reading from local_read")
         self.assertEqual(len(df_local.index), len(df.index), "Local client index is not correct")
         self.assertTrue((df == df_local).all().all(), "Local client df values are not correct")
         print(df)
-        for df_ts, ts in zip(df.index, reversed(timestamps)):
+        self.assertEqual(len(df.index), len(timestamps), "Length of the data read does not match the written data")
+        for idx, (df_ts, ts) in enumerate(zip(df.index, reversed(timestamps))):
+            # if df_ts.timestamp() != ts.timestamp():
             self.assertEqual(df_ts.timestamp(), ts.timestamp(),
-                             f"Written data ts {ts} does not correspond to read data ts {df_ts}")
+                             f"Written data ts {ts} does not correspond to read data ts {df_ts} in {idx=}")
 
         self.assertEqual(len(timestamps), df.shape[0], "Not all ticks have been read")
         # read using client
         db_metrics = self.read_client.get_metrics(DB_TEST, sensor_name)
+        db_metrics = None
+        timer.tic("Reading from read")
         df_client = self.read_client.read(DB_TEST, sensor_name, min(timestamps), metrics=db_metrics)
+        timer.toc("Reading from read")
         self.assertEqual(len(df_client.index), len(df.index), "Client index length is not correct")
         self.assertTrue((df == df_client).all().all(), "Client df values are not correct")
         pass
@@ -108,6 +120,10 @@ class TestOngTsdbClient(TestCase):
     def test_write_data1d_sensor1s(self):
         """Tests writing in database each 1 day"""
         self.write_ts(n_periods=10, data_freq="-1d", sensor_name=get_sensor_name("1s"))
+
+    def test_read_data1d_sensor1s(self):
+        """Tests writing 10k data and read it to see different speeds"""
+        self.write_ts(n_periods=10000, data_freq="-10min", sensor_name=get_sensor_name("1s"))
 
     def tearDown(self) -> None:
         """Deletes Test Database"""

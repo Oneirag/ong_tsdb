@@ -7,6 +7,36 @@ each row corresponding to a specific time interval and has a column per metric/m
 Each file is called chunk. In order to save disk space, chunks use small dtype (np.float32) 
 and old files are gziped. For each chunk, the number of measurements/metrics is the extension of the file
 
+## How data is stored
+Data is organized in binary files in directories, that are created in two levels of subdirectories of
+`BASE_DIR`.
++ The first level is the database name.
++ The second level are the sensors. One database can have many sensors. Each sensor has its own configuration (frequency, write and read tokes)
++ Inside a sensor directory, chunk files are located. Chunk files contain data for measurements associated with a specific sensor
+
+Some examples of use cases:
++ db=meter, sensor=mirubee, metrics=['active', 'reactive'] for storing real time data from a mirubee device in a meter
++ db=NYSE, sensor=APPLE, metrics=['Open', 'High', 'Low', 'Close'] for storing apple stock data
++ db=stocks, sensor=NYSE, metrics=['APL.O', 'APL.H', 'APL.L', 'APL.C'] is another way of storing the above mentioned information
+
+### Chunk file structure
+A Chunk is a fixed-row numpy matrix of `dtype=np.float32` (to save disk storage). Currently,
+each chunk has 2^14 rows. As the number of rows and the frequency of the sensor if fixed, each
+chunk represent a fixed amount of time and each row represent a specific time. E.g. if frequency is 3s,
+each chunk represent 3 * 2^14 seconds in total, and each row will represent the data 3 seconds after
+the data of the preceding row.
+
+Chunk names have the form: `{start_timestamp}.{number_of_columns}[.gz]`:
++ Start_timestamp are calculated provided that for timestamp=0 a start_timestamp=0, so for any given timestamp, its start_timestamp
+is `int(timestamp / chunk_duration) * chunk_duration`
++ number_of_columns represent the number of measurements/metrics that this chunk stores
++ if chunk name ends by `.gz` that means that it is compressed.
+The matrix inside the chunk is a numpy array with number_of_columns+2 columns (two extra columns: index and checksum). 
+The columns inside the chuk file are:
++ Column 1: represent the row number + 1, or 0 if there is no data in that row.
++ Columns 2:-1: here the metrics/measurements are stored, in the same order as the metrics/measurements where defined.
++ Column -1: is a checksum, result of adding row[1:-1], useful to check data integrity
+
 ## How to use it
 ### Create configuration files
 This package uses ong_utils for configuration, that will be search in 

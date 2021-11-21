@@ -132,7 +132,7 @@ def write_point_list(key: str, point_list: list) -> None:
             """For a ts, data_metrics is a list of strings with the metrics and data_values
             is the list of numerical values corresponding to data_metrics"""
             timestamp = timestamp / 1e9
-            init_date = int(self.chunker.init_date(timestamp))
+            init_date = int(self.chunker.chunk_timestamp(timestamp))
             if init_date not in self.timestamps:
                 self.timestamps[init_date] = list()
                 self.data_metrics[init_date] = list()
@@ -203,13 +203,33 @@ def get_lasttimestamp(db_name, sensor_name, key):
     return jsonify(dict(last_timestamp=_db.getlasttimestamp(key, db_name, sensor_name)))
 
 
+@app.route("/<db_name>/<sensor_name>/<float:start_ts>/<float:end_ts>/<string:metrics>", methods=["GET"])
+@auth_required
+def read_df(db_name, sensor_name, start_ts, end_ts=None, metrics=None, key=None):
+    """
+    Read data in a dataframe
+    :param db_name: name of db
+    :param sensor_name: name of sensor
+    :param start_ts: timestamp (millis) of date start
+    :param end_ts: timestamp (millis) of date end (by default None which means now)
+    :param metrics: coma separated list of metrics to recover. If empty, all metrics are read
+    :param key: token for reading
+    :return: a dataframe turned into bytes
+    """
+    data = _db.read(key, db_name, sensor_name, start_ts=start_ts, end_ts=end_ts)
+    df = _db.np2pd(key, db_name, sensor_name, data[0], data[1])
+    if metrics:
+        df = df.loc[:, metrics.split(",")]
+    return msgpack.dumps(df)
+
+
 #########################################
 #   Grafana endpoints
 #########################################
 @app.route("/<db_name>/<sensor_name>")
 @auth_required
 def grafana_index(db_name, sensor_name, key=None):
-    """This enpoint is called by grafane to make sure JSON input data works"""
+    """This endpoint is called by grafana to make sure JSON input data works"""
     return jsonify(dict(db=db_name, sensor=sensor_name, key=key))
 
 
@@ -219,7 +239,7 @@ def grafana_query_chunked(db_name, sensor_name, key=""):
     """Reads data and returns it streamed. Receives a post request with the data that has to read"""
 
     def grafana_query(db_name, sensor_name, key):
-        """The query itself, that yields the response and will be used later to create streammed response"""
+        """The query itself, that yields the response and will be used later to create streamed response"""
         datetotimestamp = lambda x: pd.Timestamp(x).timestamp()
         start_t = datetotimestamp(request.json['range']['from'])
         end_t = datetotimestamp(request.json['range']['to'])
@@ -281,5 +301,5 @@ if __name__ == '__main__':
         http_server = WSGIServer((config('host'), config('port')), app)
         http_server.serve_forever()
     else:
-        # Debug mode
-        app.run(config('host'), config('port'), debug=True)
+        # Debug mode, using test port and test host if available (otherwise host and port)
+        app.run(config('test_host', config('host')), config('test_port', config('port')), debug=True)
