@@ -6,7 +6,7 @@ import pandas as pd
 import ujson
 import urllib3
 from ong_tsdb import config, logger, LOCAL_TZ, DTYPE
-from ong_tsdb.code.database import OngTSDB
+from ong_tsdb.database import OngTSDB
 from urllib3.exceptions import MaxRetryError, TimeoutError, ConnectionError
 from ong_utils.timers import OngTimer
 import numpy as np

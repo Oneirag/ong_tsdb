@@ -10,7 +10,6 @@ import os
 import re
 import grp
 import gzip
-import bz2
 from pwd import getpwnam
 import stat
 import numpy as np
