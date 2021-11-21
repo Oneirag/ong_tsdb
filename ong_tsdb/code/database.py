@@ -275,64 +275,65 @@ class OngTSDB(object):
             self._replace_chunk(db, sensor, old_chunk_name, new_chunk_name, new_array, compressed)
         pass
 
-    def writetick(self, key, db, sensor, value_array: np.array, value_indexes: list = None, timestamp=None):
-        """
-        Writes tick data into database
-        :param key: key for authentication
-        :param db: name of database
-        :param sensor: name of sensor
-        :param value_array: a numpy array with the data to write. Important: its dtype will be used for writing all
-        data in the chuck
-        :param value_indexes: if None (default) value_array is a whole line in the vector, therefore its length will be
-        checked against the length of the metrics of the sensor and if they don't match an exception will be risen.
-        Otherwise, offset must be a list of indexes for each value in the array indicating the pos of the data to be
-         writen
-        :param timestamp: optional, timestamp (millis) of the current data. If None, then current timestamp will be used
-        :return: None
-        """
-        self._check_auth(key, Actions.WRITE, db, sensor)
-        self.existsensor(key, db, sensor)
-        if value_indexes is None:
-            if value_array.shape[1] != len(self.getmetrics(key, db, sensor)):
-                raise InvalidDataWriteException("Invalid number of cols of numpy array")
-        else:
-            if len(value_indexes) != value_array.shape[1]:
-                raise InvalidDataWriteException("Invalid number of indexes of numpy array")
-        if timestamp is None:
-            timestamp = time.time()
-        bytes_chunk_record = self.__getrecordsize(key, db, sensor)
-        cols_chunk_array = self.__getarraysize(key, db, sensor)
-        chunker = Chunker(self._getmetadata(key, db, sensor, self.__FREQ_KEY))
-        chunk_name = self.FU.path(db, sensor, chunker.chunk_name(timestamp, cols_chunk_array))
-        pos = chunker.getpos(timestamp)
-        # print(f"Writen in chunk: {chunk_name=} {pos=} {timestamp=}")
-        with self._lock:
-            if not os.path.isfile(chunk_name):
-                f = self.FU.safe_createfile(chunk_name, 'wb+')
-                f.write(bytes(chunker.nticks_per_chunk * bytes_chunk_record))
-                f.seek(0)
-            else:
-                f = open(chunk_name, 'rb+')
-            f.seek(pos * bytes_chunk_record)
-            if value_indexes is not None:  # offset == 0 when writing a whole tick
-                value_write = f.read(bytes_chunk_record)
-                value_write = np.fromstring(value_write, dtype=value_array.dtype)
-                # value_write[0] = timestamp
-                value_write[0] = pos + 1
-                # Add one due as the first column is the timestamp
-                value_write[list(v + 1 for v in value_indexes)] = value_array
-                value_write[-1] = value_write[1:-1].sum()  # [1:-2] does not work...curious!
-                f.seek(pos * bytes_chunk_record)
-            else:
-                value_write = np.column_stack((
-                    # timestamp,
-                    pos + 1,
-                    value_array,
-                    value_array.sum(1))).astype(value_array.dtype)
-            f.write(value_write.tobytes())
-            f.close()
+    # This function is not used anymore
+    # def writetick(self, key, db, sensor, value_array: np.array, value_indexes: list = None, timestamp=None):
+    #     """
+    #     Writes tick data into database
+    #     :param key: key for authentication
+    #     :param db: name of database
+    #     :param sensor: name of sensor
+    #     :param value_array: a numpy array with the data to write. Important: its dtype will be used for writing all
+    #     data in the chuck
+    #     :param value_indexes: if None (default) value_array is a whole line in the vector, therefore its length will be
+    #     checked against the length of the metrics of the sensor and if they don't match an exception will be risen.
+    #     Otherwise, offset must be a list of indexes for each value in the array indicating the pos of the data to be
+    #      writen
+    #     :param timestamp: optional, timestamp (millis) of the current data. If None, then current timestamp will be used
+    #     :return: None
+    #     """
+    #     self._check_auth(key, Actions.WRITE, db, sensor)
+    #     self.existsensor(key, db, sensor)
+    #     if value_indexes is None:
+    #         if value_array.shape[1] != len(self.getmetrics(key, db, sensor)):
+    #             raise InvalidDataWriteException("Invalid number of cols of numpy array")
+    #     else:
+    #         if len(value_indexes) != value_array.shape[1]:
+    #             raise InvalidDataWriteException("Invalid number of indexes of numpy array")
+    #     if timestamp is None:
+    #         timestamp = time.time()
+    #     bytes_chunk_record = self.__getrecordsize(key, db, sensor)
+    #     cols_chunk_array = self.__getarraysize(key, db, sensor)
+    #     chunker = Chunker(self._getmetadata(key, db, sensor, self.__FREQ_KEY))
+    #     chunk_name = self.FU.path(db, sensor, chunker.chunk_name(timestamp, cols_chunk_array))
+    #     pos = chunker.getpos(timestamp)
+    #     # print(f"Writen in chunk: {chunk_name=} {pos=} {timestamp=}")
+    #     with self._lock:
+    #         if not os.path.isfile(chunk_name):
+    #             f = self.FU.safe_createfile(chunk_name, 'wb')
+    #             f.write(bytes(chunker.n_rows_per_chunk * bytes_chunk_record))
+    #             f.seek(0)
+    #         else:
+    #             f = open(chunk_name, 'rb')
+    #         f.seek(pos * bytes_chunk_record)
+    #         if value_indexes is not None:  # offset == 0 when writing a whole tick
+    #             value_write = f.read(bytes_chunk_record)
+    #             value_write = np.fromstring(value_write, dtype=value_array.dtype)
+    #             # value_write[0] = timestamp
+    #             value_write[0] = pos + 1
+    #             # Add one due as the first column is the timestamp
+    #             value_write[list(v + 1 for v in value_indexes)] = value_array
+    #             value_write[-1] = value_write[1:-1].sum()  # [1:-2] does not work...curious!
+    #             f.seek(pos * bytes_chunk_record)
+    #         else:
+    #             value_write = np.column_stack((
+    #                 # timestamp,
+    #                 pos + 1,
+    #                 value_array,
+    #                 value_array.sum(1))).astype(value_array.dtype)
+    #         f.write(value_write.tobytes())
+    #         f.close()
 
-    def writetick_numpy(self, key, db, sensor, np_values: np.array, np_timestamps=None, compress=False):
+    def writetick_numpy(self, key, db, sensor, np_values: np.array, np_timestamps=None):
         """
         Writes a numpy array of tick data into database
         :param key: key for authentication
@@ -341,7 +342,6 @@ class OngTSDB(object):
         :param np_values: a numpy array with the data to write. Important: its dtype will be used for writing all
         data in the chuck
         :param np_timestamps: optional, a vector of timestamps (nanos) of the current data.
-        :param compress: optional, True for writting compressed values, False (default) otherwise
         :return: None
         """
         self._check_auth(key, Actions.WRITE, db, sensor)
@@ -358,13 +358,13 @@ class OngTSDB(object):
         # print(f"Writen in chunk: {chunk_name=} {pos=} {timestamp=}")
         with self._lock:
             if not os.path.isfile(chunk_name):
-                f = self.FU.safe_createfile(chunk_name, 'wb+')
-                value_write = np.zeros((chunker.nticks_per_chunk, cols_chunk_array), dtype=np_values.dtype)
+                f = self.FU.safe_createfile(chunk_name, 'wb')
+                value_write = np.zeros((chunker.n_rows_per_chunk, cols_chunk_array), dtype=np_values.dtype)
             else:
                 # Open for read only
                 f = self.FU.get_open_func(chunk_name)(chunk_name, 'rb')
                 value_write = np.fromstring(f.read(), dtype=np_values.dtype)
-                value_write.shape = (chunker.nticks_per_chunk, cols_chunk_array)
+                value_write.shape = (chunker.n_rows_per_chunk, cols_chunk_array)
                 f.close()
                 # Reopen for writing
                 f = self.FU.get_open_func(chunk_name)(chunk_name, 'wb')
@@ -400,6 +400,7 @@ class OngTSDB(object):
         return Chunker(self._getmetadata(key, db, sensor, self.__FREQ_KEY))
 
     def getlasttimestamp(self, key, db, sensor):
+        """Gets the last timestamp (in millis) of the data"""
         self.existsensor(key, db, sensor)
         self._check_auth(key, Actions.READ, db, sensor)
         chunks = self.FU.getchunks(db, sensor)
@@ -473,7 +474,7 @@ class OngTSDB(object):
         SHAPE = chunker.np_shape(len(self.getmetrics(key, db, sensor)))
 
         # As a default, read current chunk (the one corresponding to current time
-        start_ts = start_ts or chunker.init_date(time.time())
+        start_ts = start_ts or chunker.chunk_timestamp(time.time())
         end_ts = end_ts or time.time()
         chunk = start_ts
         now = repr(time.time())
@@ -496,16 +497,25 @@ class OngTSDB(object):
         self.cache[now].data_available = False
         self.cache[now].fn = ""
 
+        def get_chunk_filename(chunk):
+            for compressed in (False, True):
+                chunk_name = chunker.chunk_name(chunk, SHAPE[1], compressed=compressed)
+                file_name = self.get_FU_path(db, sensor, chunk_name)
+                if os.path.exists(file_name):
+                    return file_name
+            return file_name
+
         while True:
-            #            chunker = self.getchunker(key, db, sensor)
-            chunk_ts = chunker.init_date(chunk)
-            is_last_chunk = chunk_ts == chunker.init_date(end_ts)
-            #           o.tic()
-            #            file_name = self.FU.path(db, sensor, chunker.chunk_name(chunk))
-            file_name = self.get_FU_path(db, sensor, chunker.chunk_name(chunk, SHAPE[1]))
+            chunk_ts = chunker.chunk_timestamp(chunk)
+            is_last_chunk = chunk_ts == chunker.chunk_timestamp(end_ts)
+
+            file_name = get_chunk_filename(chunk)
+            # chunk_name = chunker.chunk_name(chunk, SHAPE[1])
+            # file_name = self.get_FU_path(db, sensor, chunk_name)
+
             chunk += max(chunker.chunk_duration, step)
-            next_file_name = self.get_FU_path(db, sensor, chunker.chunk_name(chunk, SHAPE[1]))
-            #            next_file_name = self.FU.path(db, sensor, chunker.chunk_name(chunk))
+            next_file_name = get_chunk_filename(chunk)
+            # next_file_name = self.get_FU_path(db, sensor, chunker.chunk_name(chunk, SHAPE[1]))
             # perform a cache of next chunk here
             cache = self.cache[now]
             if cache.data_available and cache.fn == file_name:
@@ -517,29 +527,31 @@ class OngTSDB(object):
             cache.data_available = False
             if not is_last_chunk:
                 start_new_thread(cache_read, (cache, next_file_name, start_ts,
-                                              end_ts, SHAPE, is_last_chunk, chunker.init_date(chunk),
+                                              end_ts, SHAPE, is_last_chunk, chunker.chunk_timestamp(chunk),
                                               chunker.tick_duration))
 
             #            o.toc("read chunk")
             if new_dates is not None:
                 yield new_dates, new_values, chunker.tick_duration
-            if chunker.init_date(chunk) > end_ts:
+            if chunker.chunk_timestamp(chunk) > end_ts:
                 break
         del (self.cache[now])
 
     def _readchunk(self, file_name, start_ts, end_ts, SHAPE, is_last_chunk, chunk_ts: int, tick_duration: float):
         if os.path.isfile(file_name):
             #            o.tic()
-            chunk_value = self.FU.fast_read_np(file_name, SHAPE, dtype=DTYPE)
-            if chunk_value is None:
+            orig_chunk_value = self.FU.fast_read_np(file_name, SHAPE, dtype=DTYPE)
+            if orig_chunk_value is None:
                 return None, None
-            positions = chunk_value[:, 0].astype(np.float64)
+            positions = orig_chunk_value[:, 0].astype(np.float64)
             timestamps = (positions - 1) * tick_duration + chunk_ts
             # filter out empty values
             idx_filter = (timestamps >= start_ts) & (positions > 0)
             if is_last_chunk:
                 idx_filter = idx_filter & (timestamps <= end_ts)
-            chunk_value = chunk_value[idx_filter, :]
+            chunk_value = orig_chunk_value[idx_filter, :]
+            if chunk_value.shape[0] < len(orig_chunk_value[:, 0].nonzero()):
+                print("oh oohhhhhhh")
             new_dates = timestamps[idx_filter]
             # Verify checksum
             if len(chunk_value) > 0:

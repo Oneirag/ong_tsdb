@@ -13,3 +13,4 @@ COMPRESSION_EXT = ".gz"
 # DTYPE = np.float32  # Dates would end if 2038 if used float32
 DTYPE = np.float64
 DTYPE = np.float32  # Now trying storing not the full TS but the offset with the TS start...
+CHUNK_ROWS = 2 ** 14

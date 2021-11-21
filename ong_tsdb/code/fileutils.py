@@ -10,11 +10,13 @@ import os
 import re
 import grp
 import gzip
+import bz2
 from pwd import getpwnam
 import stat
 import numpy as np
-from ong_tsdb import config, BASE_DIR, COMPRESSION_EXT
+from ong_tsdb import config, BASE_DIR, COMPRESSION_EXT, logger, DTYPE, CHUNK_ROWS
 from pprint import pprint
+
 
 # Regular expression for parsing chunk filenames
 re_chunk_filename = re.compile(f"(?P<timestamp>\d+).(?P<n_columns>\d+)(?P<compression>{COMPRESSION_EXT})?")
@@ -201,10 +203,11 @@ class FileUtils(object):
         os.fchown(fdesc, self.userid, self.groupid)
         return os.fdopen(fdesc, mode)
 
-    def __verify_chunk_content(self, filename, dtype=np.float64):
+    def __verify_chunk_content(self, filename, dtype=DTYPE, print_summary_stats=True):
         """Prints to screen the analysis of the chunk file filename"""
         arr = self.fast_read_np(filename, dtype=dtype)
-        cols = _get_chunkcolumns(filename)
+        if arr.shape[0] != CHUNK_ROWS:
+            logger.error(f"Error in {filename}: expected {CHUNK_ROWS} rows but file has {arr.shape[0]}")
         index = arr[:, 0].nonzero()[0]
         min_index = index[0] if len(index) > 0 else -1
         max_index = index[-1] if len(index) > 0 else -1
@@ -215,10 +218,13 @@ class FileUtils(object):
                     row_index_min=min_index, row_index_max=max_index,
                     ratio_max_index=(max_index + 1) / float(len(arr))
                     )
-        pprint(stat)
+        if print_summary_stats:
+            pprint(stat)
+        return stat
 
-    def verify_all_chunks(self, filter_db_name=None, dtype=np.float64):
+    def verify_all_chunks(self, filter_db_name=None, dtype=DTYPE, print_per_chunk_data=True):
         """Gives some statistics on the chunks of a certain DB (or all if not db_name)"""
+        total_data = 0
         for db_name in self.getdbs():
             if filter_db_name and db_name != filter_db_name:
                 continue
@@ -233,16 +239,24 @@ class FileUtils(object):
                     else:
                         difference = None
                     print("{} - {} - {}".format(timestamps[i], difference, dates[i]))
-                    self.__verify_chunk_content(self.path(sensorpath, chunkfiles[i]), dtype=dtype)
+                    stat = self.__verify_chunk_content(self.path(sensorpath, chunkfiles[i]), dtype=dtype,
+                                                       print_summary_stats=print_per_chunk_data)
+                    total_data += stat["rows_used"]
+                print()
+                print(f"Summary for {db_name=} {sensor=}")
+                print(f"Number of chunks: {len(chunkfiles)}")
+                print(f"Number of used rows: {total_data}")
+                print()
 
     def get_open_func(self, filename):
         """Returns function to open file. If file is compressed uses gzip.open else uses standard open"""
         if filename.endswith(COMPRESSION_EXT):
+            # return bz2.open
             return gzip.open
         else:
             return open
 
-    def fast_read_np(self, filename, shape=None, dtype=np.float64):
+    def fast_read_np(self, filename, shape=None, dtype=DTYPE):
         """Reads a chunk file into a numpy array"""
         if not os.path.isfile(filename):
             return None
