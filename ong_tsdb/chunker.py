@@ -7,7 +7,7 @@ import time
 import numpy as np
 
 from ong_tsdb import COMPRESSION_EXT, DTYPE, config, CHUNK_ROWS
-from ong_tsdb.code.fileutils import generate_filename_from_parts
+from ong_tsdb.fileutils import generate_filename_from_parts
 
 
 class Chunker(object):

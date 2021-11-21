@@ -18,8 +18,8 @@ from gevent.pywsgi import WSGIServer
 from werkzeug.exceptions import HTTPException, Unauthorized
 
 from ong_tsdb import config, DTYPE
-from ong_tsdb.code.database import OngTSDB, NotAuthorizedException
-from ong_tsdb.code.server_utils import split_influx
+from ong_tsdb.database import OngTSDB, NotAuthorizedException
+from ong_tsdb.server_utils import split_influx
 
 _db = OngTSDB()
 

@@ -19,8 +19,8 @@ import ujson
 from six.moves._thread import start_new_thread
 
 from ong_tsdb import logger, LOCAL_TZ, BASE_DIR, DTYPE
-from ong_tsdb.code.chunker import Chunker
-from ong_tsdb.code.fileutils import FileUtils, re_chunk_filename
+from ong_tsdb.chunker import Chunker
+from ong_tsdb.fileutils import FileUtils, re_chunk_filename
 
 
 class OngTSDBbBaseException(Exception):
