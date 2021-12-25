@@ -17,7 +17,7 @@ from flask import Flask, jsonify, request, stream_with_context, send_file
 from gevent.pywsgi import WSGIServer
 from werkzeug.exceptions import HTTPException, Unauthorized
 
-from ong_tsdb import config, DTYPE
+from ong_tsdb import config, DTYPE, HELLO_MSG
 from ong_tsdb.database import OngTSDB, NotAuthorizedException
 from ong_tsdb.server_utils import split_influx
 
@@ -29,11 +29,12 @@ app = Flask(__name__)
 @app.errorhandler(HTTPException)
 def handle_http_exception(e):
     """Return JSON instead of HTML for HTTP errors."""
-    return jsonify({
-        "code": e.code,
-        "name": e.name,
-        "description": e.description,
-    }), e.code
+    # now you're handling non-HTTP exceptions only
+    return make_js_response("HTTP Exception found", e.code,
+                            code=e.code,
+                            name=e.name,
+                            description=e.description,
+                            )
 
 
 @app.errorhandler(Exception)
@@ -43,16 +44,16 @@ def handle_exception(e):
         return e
 
     # now you're handling non-HTTP exceptions only
-    return jsonify({
-        "code": 500,
-        "name": e.__class__.__name__,
-        "description": str(e),
-    }), 500
+    return make_js_response("Generic Exception found", 500,
+                            code=500,
+                            name=e.__class__.__name__,
+                            description=str(e),
+                            )
 
 
-def make_js_response(msg, http_code=200):
+def make_js_response(msg, http_code=200, **kwargs):
     """Returns a js with msg as field and the http code"""
-    return jsonify(msg=msg), http_code
+    return jsonify(msg=msg, http_code=http_code, ok=http_code == 200, **kwargs), http_code
 
 
 def auth_required(f):
@@ -73,7 +74,7 @@ def auth_required(f):
 
 @app.errorhandler(404)
 def resource_not_found(e):
-    return jsonify(error=str(e)), 404
+    return make_js_response("Page not found", 404, error=str(e))
 
 
 @app.route('/config_reload', methods=["POST"])
@@ -82,6 +83,12 @@ def config_reload(key):
     """Reloads configuration just in case any external change happened. Currently no token is required"""
     _db.config_reload()
     return make_js_response("Configuration refreshed OK")
+
+
+@app.route("/")
+def hello():
+    """Says hello to check that server is running"""
+    return make_js_response(HELLO_MSG, 200)
 
 
 @app.route('/db/<database>', methods=["POST"])
@@ -230,7 +237,7 @@ def read_df(db_name, sensor_name, key=None):
         # return send_file(buff, download_name=str(len(dates)))
         bytes_dates = dates.tobytes()
         bytes_values = values.tobytes()
-        encoded_numpy = encodebytes(bytes_dates + bytes_values) #.decode()
+        encoded_numpy = encodebytes(bytes_dates + bytes_values)  # .decode()
         metrics = _db.getmetrics(key, db_name, sensor_name)
         # return encoded_numpy and the list of metrics
         retval = {

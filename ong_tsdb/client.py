@@ -5,11 +5,12 @@ import base64
 import pandas as pd
 import ujson
 import urllib3
-from ong_tsdb import config, logger, LOCAL_TZ, DTYPE
+from ong_tsdb import config, logger, LOCAL_TZ, DTYPE, HELLO_MSG
 from ong_tsdb.database import OngTSDB
 from urllib3.exceptions import MaxRetryError, TimeoutError, ConnectionError
 from ong_utils.timers import OngTimer
 import numpy as np
+
 
 timer = OngTimer(False)
 
@@ -35,22 +36,33 @@ class WrongAddressException(OngTsdbClientBaseException):
 
 class OngTsdbClient:
 
-    def __init__(self, url:str, port, token:str):
+    def __init__(self, url: str, port, token: str, retry_total=20, retry_connect=None, retry_backoff_factor=.2):
         """
         Initializes client
         :param url: url of the ong_tsdb client. If empty or none, http://localhost will be used
         :param port: port of the ong_tsdb client
         :param token: the token to use for communication
+        :param retry_total: param total for urllib3.Retry. Defaults to 20
+        :param retry_connect: param connect for urllib3.Retry. Defaults to 10 if host is not localhost else 1
+        :param retry_backoff_factor: param backoff_factor for urllib3.Retry. Defaults to 0.2
         """
         self.server_url = url or "http://localhost"
+        if self.server_url == "http://localhost":
+            retry_connect = retry_connect or 1
+        else:
+            retry_connect = retry_connect or 10
         if self.server_url.endswith("/"):
             self.server_url = self.server_url[:-1]
         self.server_url += f":{port}"
         self.token = token
         self.headers = urllib3.make_headers(basic_auth=f'token:{self.token}')
         self.headers.update({"Content-Type": "application/json"})
-        self.http = urllib3.PoolManager(retries=urllib3.Retry(total=20, connect=10,
-                                                              backoff_factor=0.2))
+        self.http = urllib3.PoolManager(retries=urllib3.Retry(total=retry_total, connect=retry_connect,
+                                                              backoff_factor=retry_backoff_factor))
+        # Make a connection test to make sure server is running
+        res = self._request("get", self.server_url)
+        if res is None or HELLO_MSG != ujson.loads(res.data).get("msg", ""):
+            raise ServerDownException("Server provided an unexpected response. Check if host and port are correct")
 
     def _request(self, method, url, *args, **kwargs):
         """Execute request adding token to header. Raises Exception if unauthorized"""
@@ -169,13 +181,12 @@ class OngTsdbClient:
 
         return self.write(sequence)
 
-
     def config_reload(self):
         """Forces a config reload of server (e.g. for manually modifying sensors)"""
         return self._post(self._make_url("/config_reload"))
 
     def _make_url(self, url):
-        """Retunrs url for queries"""
+        """Returns url for queries"""
         return self.server_url + url
 
     def get_lasttimestamp(self, db, sensor):
