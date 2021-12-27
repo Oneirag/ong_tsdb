@@ -3,7 +3,7 @@ A file-based time series database for fixed interval data, meant for managing da
 intervals (such as meter data, stock data, power market prices...).
 
 It is aimed at running in cheap hardware (e.g. raspberry pi, low-end mini pc...) with very little CPU usage and
-memory footprint (unless you are not receiving lots of data), and as it is file-based it is easy to backup just by 
+memory footprint (unless you are not receiving lots of data), and as it is file-based it is easy to back up just by 
 copying directories.
 
 However, due to its simplicity it has a lot of disadvantages:
@@ -20,7 +20,7 @@ Data is stored in files in a directory, where each file is a numpy array of fixe
 each row corresponding to a specific time interval and has a column per metric/measurement.
 
 Each file is called chunk. In order to save disk space, chunks use small dtype (np.float32) 
-and old files are gziped. For each chunk, the number of measurements/metrics is the extension of the file
+and old files are gzipped. For each chunk, the number of measurements/metrics is the extension of the file
 
 ## How data is stored
 Data is organized in binary files in directories, that are created in two levels of subdirectories of
@@ -33,6 +33,9 @@ Some examples of use cases:
 + db=meter, sensor=mirubee, metrics=['active', 'reactive'] for storing real time data from a mirubee device in a meter
 + db=NYSE, sensor=APPLE, metrics=['Open', 'High', 'Low', 'Close'] for storing apple stock data
 + db=stocks, sensor=NYSE, metrics=['APL.O', 'APL.H', 'APL.L', 'APL.C'] is another way of storing the above-mentioned information
++ db=stocks, sensor=NYSE, metrics=[['APL', 'Open'], ['APL','High'], ['APL', 'Low'], ['APL', 'Close']] uses multiindex 
+to manage the stock data. In such case the df returned will have two levels in columns, but using pandas functions it will
+make easier to manipulate in case of several stocks read from NYSE
 
 ### Chunk file structure
 A Chunk is a fixed-row numpy matrix of `dtype=np.float32` (to save disk storage). Currently,
@@ -110,7 +113,7 @@ import pandas as pd
 from ong_tsdb import config
 from ong_tsdb.client import OngTsdbClient
 
-# With admin key would also work. Otherwise errors for lack of permissions would be risen
+# With admin key would also work. Otherwise, errors for lack of permissions would be risen
 write_client = OngTsdbClient(url=config('url'), token=config('write_token'))
 
 ts = pd.Timestamp.now().value
@@ -133,8 +136,8 @@ import pandas as pd
 from ong_tsdb import config
 from ong_tsdb.client import OngTsdbClient
 
-# With admin key would also work. Otherwise errors for lack of permissions would be risen
-read_client = OngTsdbClient(url=config('url'), oken=config('read_token'))
+# With admin key would also work. Otherwise, errors for lack of permissions would be risen
+read_client = OngTsdbClient(url=config('url'), token=config('read_token'))
 
 # Read data into pandas dataframe, columns are metric names and indexed by data in LOCAL_TZ
 df = read_client.read("my_db", "my_sensor", pd.Timestamp(2021,10,10))   # All measurements/metrics

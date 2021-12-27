@@ -177,6 +177,10 @@ class TestOngTsdbClient(TestCase):
             df_read = df_read.astype(df_write.dtypes)
             print(df_read)
             self.assertTrue(df_read.equals(df_write), f"Dataframes do not match for {now=}")
+        # Now test a bad timestamp
+        now_local_tz = pd.Timestamp.now(tz=LOCAL_TZ).normalize()
+        df_read = self.read_client.read(DB_TEST, metadata_sensor, now_local_tz)
+        self.assertFalse(df_read.empty, "Read an empty dataframe!")
 
         # Test trying to change metadata
         new_level_names = ['X', 'Y', 'Z']

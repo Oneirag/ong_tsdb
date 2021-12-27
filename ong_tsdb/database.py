@@ -445,8 +445,11 @@ class OngTSDB(object):
         step = step or chunker.chunk_duration
         SHAPE = chunker.np_shape(len(self.get_metrics(key, db, sensor)))
 
-        # As a default, read current chunk (the one corresponding to current time
+        # As a default, read current chunk (the one corresponding to current time)
         start_ts = start_ts or chunker.chunk_timestamp(time.time())
+        # Truncate start_ts to the corresponding chunk duration. For example, if frequency = "1D" and start_ts is
+        # the middle of the day, the start_ts is moved to the start of the day so data is read
+        start_ts = chunker.tick_duration * (start_ts // chunker.tick_duration)
         end_ts = end_ts or time.time()
         chunk = start_ts
         now = repr(time.time())
@@ -523,7 +526,7 @@ class OngTSDB(object):
                 idx_filter = idx_filter & (timestamps <= end_ts)
             chunk_value = orig_chunk_value[idx_filter, :]
             if chunk_value.shape[0] < len(orig_chunk_value[:, 0].nonzero()):
-                print("oh oohhhhhhh")
+                print("oh oohhhhhhh, read empty chunk!")
             new_dates = timestamps[idx_filter]
             # Verify checksum
             if len(chunk_value) > 0:

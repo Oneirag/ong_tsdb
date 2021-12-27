@@ -352,12 +352,15 @@ class OngTsdbClient:
         dates = np.frombuffer(bts[:dates_len])
         values = np.frombuffer(bts[dates_len:], dtype=DTYPE)
         # metrics_db = self.get_metrics(db, sensor)
-        if len(values) > 0:
-            values.shape = len(dates), int(values.shape[0] / len(dates))
         if date_from.tz:
             dateindex = pd.to_datetime(dates, unit='s', utc=True).tz_convert(date_from.tz)
         else:
             dateindex = pd.to_datetime(dates, unit='s')
+        if len(values) > 0:
+            values.shape = len(dates), int(values.shape[0] / len(dates))
+        else:
+            values = None
+            values = None
         df = pd.DataFrame(values, index=dateindex, columns=metrics_db)
         if metrics is not None:
             df = df.loc[:, metrics]
