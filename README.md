@@ -1,6 +1,21 @@
 # Ong_tsdb
-A simple, unsecure, not thread-safe, non-distributed, file-based time series database for fixed interval data, meant for data received 
-in regular intervals (such as meter data, stock data, power market prices...). 
+A file-based time series database for fixed interval data, meant for managing data received in regular 
+intervals (such as meter data, stock data, power market prices...).
+
+It is aimed at running in cheap hardware (e.g. raspberry pi, low-end mini pc...) with very little CPU usage and
+memory footprint (unless you are not receiving lots of data), and as it is file-based it is easy to backup just by 
+copying directories.
+
+However, due to its simplicity it has a lot of disadvantages:
+* is rather **unsecure**
+* **not thread-safe**
+* **non-distributed**
+* it might **not be able to manage a great load** of ingested data at once
+* it is **not probably the fastest** DB in the world
+* it writes every tick to the HD, so if using a SD or SDD it can reduce its expected live 
+
+Therefore, it is **only recommended for personal use in DIY projects**.
+
 Data is stored in files in a directory, where each file is a numpy array of fixed number of rows, 
 each row corresponding to a specific time interval and has a column per metric/measurement.
 
@@ -17,7 +32,7 @@ Data is organized in binary files in directories, that are created in two levels
 Some examples of use cases:
 + db=meter, sensor=mirubee, metrics=['active', 'reactive'] for storing real time data from a mirubee device in a meter
 + db=NYSE, sensor=APPLE, metrics=['Open', 'High', 'Low', 'Close'] for storing apple stock data
-+ db=stocks, sensor=NYSE, metrics=['APL.O', 'APL.H', 'APL.L', 'APL.C'] is another way of storing the above mentioned information
++ db=stocks, sensor=NYSE, metrics=['APL.O', 'APL.H', 'APL.L', 'APL.C'] is another way of storing the above-mentioned information
 
 ### Chunk file structure
 A Chunk is a fixed-row numpy matrix of `dtype=np.float32` (to save disk storage). Currently,
@@ -44,10 +59,10 @@ This package uses ong_utils for configuration, that will be search in
 The minimal configuration would be:
 ```yaml
 ong_tsdb:
-    BASE_DIR: ~/Documentos/ong_tsdb   # Location to store files
-    port: 5000                        # Port for flask server
-    host: 127.0.0.1                   # host for flask server
-    url: http://localhost             # host for client
+    BASE_DIR: ~/Documents/ong_tsdb   # Location to store files
+    port: 5000                        # Port for flask server only
+    host: 127.0.0.1                   # host for flask server only
+    url: http://localhost:5000        # url for client. Include port if needed 
     admin_token: whatever_you_want_here 
     read_token: whatever_you_want_here
     write_token: whatever_you_want_here
@@ -65,7 +80,7 @@ Run server.py
 from ong_tsdb import config
 from ong_tsdb.client import OngTsdbClient
 
-admin_client = OngTsdbClient(url=config('url'), port=config('port'), token=config('admin_token'))
+admin_client = OngTsdbClient(url=config('url'), token=config('admin_token'))
 admin_client.create_db("name_of_database")
 # Create a sensor that stores data every second
 admin_client.create_sensor("name_of_database", "name_of_sensor", "1s", list(),
@@ -79,6 +94,9 @@ admin_client.create_sensor("name_of_database", "name_of_sensor_two_mins", "2m", 
 admin_client.create_sensor("name_of_database", "name_of_sensor_wk", "7d", list(),
                            read_key=config("read_token"), write_key=config("write_token"))
 
+# Metrics can be a list. In such cases dataframes are multiindex dataframes
+admin_client.create_sensor("name_of_database", "name_of_sensor_wk", "7d", [["A", "B", "C"]],
+                           read_key=config("read_token"), write_key=config("write_token"))
 
 ```
 
@@ -93,7 +111,7 @@ from ong_tsdb import config
 from ong_tsdb.client import OngTsdbClient
 
 # With admin key would also work. Otherwise errors for lack of permissions would be risen
-write_client = OngTsdbClient(url=config('url'), port=config('port'), token=config('write_token'))
+write_client = OngTsdbClient(url=config('url'), token=config('write_token'))
 
 ts = pd.Timestamp.now().value
 sequence_str = f"my_db,sensor=my_sensor measurement1=123,measurement2=34.4 {ts}"
@@ -116,7 +134,7 @@ from ong_tsdb import config
 from ong_tsdb.client import OngTsdbClient
 
 # With admin key would also work. Otherwise errors for lack of permissions would be risen
-read_client = OngTsdbClient(url=config('url'), port=config('port'), token=config('read_token'))
+read_client = OngTsdbClient(url=config('url'), oken=config('read_token'))
 
 # Read data into pandas dataframe, columns are metric names and indexed by data in LOCAL_TZ
 df = read_client.read("my_db", "my_sensor", pd.Timestamp(2021,10,10))   # All measurements/metrics
@@ -129,6 +147,37 @@ df =read_client.local_read("my_db", "my_sensor", pd.Timestamp(2020,10,10), pd.Ti
 
 ```
 
+### Multiindex
+Ong_tsdb can manage multiindex dataframes by treating measurements as a list of strings.
+If multiindex has level names and Ong_tsdb must be aware of them, either:
+* Call create_sensor using level_names parameters
+* Call create_sensor using metadata parameter with a dictionary having a key "level_names" with the level names (same as above)
+* Call client.set_level_names for an existing sensor with the new level_names
+
+See the following example for creating a multiindex sensor with either level_names or metadata:
+```python
+import pandas as pd
+from ong_tsdb import config
+from ong_tsdb.client import OngTsdbClient
+
+admin_client = OngTsdbClient(url=config('url'), token=config('admin_token'))
+
+admin_client.create_db("name_of_database")
+# Create a sensor that stores data every second. 
+# As measurements is a list of list, it will create just be one measurement, indexed by ("value1", "value2")
+admin_client.create_sensor("name_of_database", "name_of_sensor", "1s", [['value1', 'value2']],
+                           read_key=config("read_token"), write_key=config("write_token"))
+
+# Same as above, but now level_names for the multiindex are informed. That will make multiindex easier to 
+# query as a dataframe
+admin_client.create_sensor("name_of_database", "name_of_sensor", "1s", [['value1', 'value2']],
+                           read_key=config("read_token"), write_key=config("write_token"), 
+                           level_names=["one", "another"])
+# Exactly the same as above, but a little more verbose
+admin_client.create_sensor("name_of_database", "name_of_sensor", "1s", [['value1', 'value2']],
+                           read_key=config("read_token"), write_key=config("write_token"), 
+                           metadata=dict(level_names=["one", "another"]))
+```
 
 ## Relation to influxdb
 Ong_tsdb resembles some concepts of [influxdb](https://www.influxdata.com/):

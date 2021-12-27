@@ -1,12 +1,12 @@
 import time
-from unittest import TestCase
+from unittest import TestCase, main
 
 import pandas as pd
 import numpy as np
 
 from ong_tsdb import config, LOCAL_TZ
 from ong_tsdb.client import OngTsdbClient
-from ong_tsdb.code.database import OngTSDB
+from ong_tsdb.database import OngTSDB
 from ong_utils import OngTimer
 
 DB_TEST = "testing_database"
@@ -19,10 +19,9 @@ def get_sensor_name(freq):
 
 class TestOngTsdbClient(TestCase):
     _db = OngTSDB()
-    port = config('test_port', config('port'))
-    admin_client = OngTsdbClient(url=config('url'), port=port, token=config('admin_token'))
-    read_client = OngTsdbClient(url=config('url'), port=port, token=config('read_token'))
-    write_client = OngTsdbClient(url=config('url'), port=port, token=config('write_token'))
+    admin_client = OngTsdbClient(url=config('url'), token=config('admin_token'))
+    read_client = OngTsdbClient(url=config('url'), token=config('read_token'))
+    write_client = OngTsdbClient(url=config('url'), token=config('write_token'))
     admin_key = config("admin_token")
     write_key = config("write_token")
     read_key = config("read_token")
@@ -30,17 +29,22 @@ class TestOngTsdbClient(TestCase):
 
     def setUp(self) -> None:
         """Deletes previous versions of databases and creates a new structure for TEST database"""
-        if self._db.existdb(self.admin_key, DB_TEST):
-            self._db.deletedb(self.admin_key, DB_TEST)
+        # if self._db.exist_db(self.admin_key, DB_TEST):
+        #     self._db.delete_db(self.admin_key, DB_TEST)
+        if self.admin_client.exist_db(DB_TEST):
+            self.admin_client.delete_db(DB_TEST)
         print(self.admin_client.config_reload())
         print(self.admin_client.create_db(DB_TEST))
         for freq in self.sensor_freqs:
             sensor_name = get_sensor_name(freq)
-            if self._db.existsensor(self.admin_key, DB_TEST, sensor_name):
-                self._db.deletesensor(config("admin_token"), DB_TEST, sensor_name)
+            if self.admin_client.exist_sensor(DB_TEST, sensor_name):
+                self.admin_client.delete_sensor(DB_TEST, sensor_name)
+            # if self._db.exist_sensor(self.admin_key, DB_TEST, sensor_name):
+            #    self._db.delete_sensor(config("admin_token"), DB_TEST, sensor_name)
             sensor_created_ok = self.admin_client.create_sensor(DB_TEST, sensor_name, freq,
                                                                 ["active", "reactive"], write_key=self.write_key,
                                                                 read_key=self.read_key)
+            self.assertIsNone(self.admin_client.get_metadata(DB_TEST, sensor_name), "Metadata is not None")
             print(f"Sensor {sensor_name} created {sensor_created_ok}")
         print("Test database created")
 
@@ -127,9 +131,9 @@ class TestOngTsdbClient(TestCase):
 
     def test_read_data1d_sensor1s(self):
         """Tests writing 10k data and read it to see different speeds"""
-        #self.write_ts(n_periods=12, data_freq="-80min", sensor_name=get_sensor_name("1s"))
-        #self.write_ts(n_periods=40, data_freq="-350min", sensor_name=get_sensor_name("1s"))
-        #self.write_ts(n_periods=50, data_freq="-250min", sensor_name=get_sensor_name("1s"))
+        # self.write_ts(n_periods=12, data_freq="-80min", sensor_name=get_sensor_name("1s"))
+        # self.write_ts(n_periods=40, data_freq="-350min", sensor_name=get_sensor_name("1s"))
+        # self.write_ts(n_periods=50, data_freq="-250min", sensor_name=get_sensor_name("1s"))
         self.write_ts(n_periods=10000, data_freq="-10min", sensor_name=get_sensor_name("1s"))
 
     def test_write_df(self):
@@ -149,8 +153,75 @@ class TestOngTsdbClient(TestCase):
         self.assertSequenceEqual(list(df.index), list(df2.index), "Data writen and data read don't have the same index")
         self.assertTrue((df == df2).all().all(), "Data writen and data read are not the same")
 
+    def test_metadata(self):
+        """Checks for writing and reading list metrics and metadata as list"""
+        level_names = ['one', 'two', 'three']
+        metrics = [['A', 'B', 'C'], ['D', 'E', 'F']]
+        metadata_sensor = "metadata_sensor"
+        self.admin_client.create_sensor(DB_TEST, metadata_sensor, "1D", metrics, read_key=self.read_key,
+                                        write_key=self.write_key, level_names=level_names)
+        metrics_db = self.read_client.get_metrics(DB_TEST, metadata_sensor)
+        metadata_db = self.read_client.get_metadata(DB_TEST, metadata_sensor)
+        self.assertEqual(metrics, metrics_db, "Incorrect metrics")
+        self.assertEqual(dict(level_names=level_names), metadata_db, "Incorrect metadata")
+        # Same test with different types of timestamps
+        for now in (
+                pd.Timestamp.utcnow().normalize().tz_convert(LOCAL_TZ),     # Date in LOCAL_TZ
+                pd.Timestamp.now().normalize(),                             # Naive date
+                pd.Timestamp.utcnow().normalize(),                          # Naive UTC date
+                ):
+            df_write = pd.DataFrame([[1.0, 2.0]], columns=pd.MultiIndex.from_tuples(metrics,
+                                                                                    names=level_names), index=[now])
+            self.write_client.write_df(DB_TEST, metadata_sensor, df_write)
+            df_read = self.read_client.read(DB_TEST, metadata_sensor, now)
+            df_read = df_read.astype(df_write.dtypes)
+            print(df_read)
+            self.assertTrue(df_read.equals(df_write), f"Dataframes do not match for {now=}")
+
+        # Test trying to change metadata
+        new_level_names = ['X', 'Y', 'Z']
+        self.assertTrue(self.admin_client.set_level_names(DB_TEST, metadata_sensor, new_level_names))
+        new_df_read = self.read_client.read(DB_TEST, metadata_sensor, now)
+        self.assertSequenceEqual(new_df_read.columns.names, new_level_names, "Level_names did not change!")
+        pass
+
+    def test_exists(self):
+        """Test exist_sensor and exist_database"""
+        good_sensor_name = get_sensor_name(self.sensor_freqs[0])
+        self.assertTrue(self.read_client.exist_sensor(DB_TEST, good_sensor_name),
+                        "Sensor does not exit!")
+        self.assertFalse(self.read_client.exist_sensor(DB_TEST, good_sensor_name + "_random_junk"),
+                         "Sensor should not exit!")
+
+    def test_delete(self):
+        """Test delete_database and delete_sensor, creating a fake database and sensor"""
+        db_delete = DB_TEST + "_junk"
+        sensor_delete = "sensor1"
+        self.assertFalse(self.read_client.exist_db(db_delete), "Delete database already existed!")
+        self.assertTrue(self.admin_client.create_db(db_delete))
+        self.assertTrue(self.admin_client.create_sensor(db_delete, sensor_delete, self.sensor_freqs[0], list(),
+                                                        self.read_key, self.write_key))
+        self.assertTrue(self.read_client.exist_sensor(db_delete, sensor_delete), "Sensor delete was not created!")
+        self.assertFalse(self.read_client.delete_sensor(db_delete, sensor_delete), "Read client deleted a sensor!")
+        self.assertFalse(self.write_client.delete_sensor(db_delete, sensor_delete), "Write client deleted a sensor!")
+        self.assertTrue(self.admin_client.delete_sensor(db_delete, sensor_delete),
+                        "Admin client could not delete a sensor!")
+        self.assertFalse(self.read_client.exist_sensor(db_delete, sensor_delete), "Sensor was not deleted!")
+        self.assertFalse(self.read_client.delete_db(db_delete), "Read client deleted a database!")
+        self.assertFalse(self.write_client.delete_db(db_delete), "Write client deleted a database!")
+        self.assertTrue(self.admin_client.delete_db(db_delete), "Admin client could not delete a database!")
+        self.assertFalse(self.read_client.exist_db(db_delete), "Database was not deleted!")
+
     def tearDown(self) -> None:
         """Deletes Test Database"""
-        if self._db.existdb(self.admin_key, DB_TEST):
-            self._db.deletedb(self.admin_key, DB_TEST)
-        print("Test database deleted")
+        if self.admin_client.exist_db(DB_TEST):
+            if self.admin_client.delete_db(DB_TEST):
+                print("Test database deleted")
+            else:
+                print("Test database could not be deleted")
+        else:
+            print("Test database not existed")
+
+
+if __name__ == '__main__':
+    main()

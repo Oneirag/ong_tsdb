@@ -36,24 +36,25 @@ class WrongAddressException(OngTsdbClientBaseException):
 
 class OngTsdbClient:
 
-    def __init__(self, url: str, port, token: str, retry_total=20, retry_connect=None, retry_backoff_factor=.2):
+    def __init__(self, url: str, token: str, retry_total=20, retry_connect=None, retry_backoff_factor=.2, **kwargs):
         """
-        Initializes client
-        :param url: url of the ong_tsdb client. If empty or none, http://localhost will be used
-        :param port: port of the ong_tsdb client
+        Initializes client. It needs just an url (that includes port, parameter port is kept for backward compatibility
+         but it is not used anymore) and a token.
+         Example: admin_client = OngTsdbClient(url=config('url'), token=config('admin_token'))
+        :param url: url of the ong_tsdb client. If empty or none, http://localhost:5000 will be used. Param
+        port is not used anymore
         :param token: the token to use for communication
         :param retry_total: param total for urllib3.Retry. Defaults to 20
         :param retry_connect: param connect for urllib3.Retry. Defaults to 10 if host is not localhost else 1
         :param retry_backoff_factor: param backoff_factor for urllib3.Retry. Defaults to 0.2
         """
-        self.server_url = url or "http://localhost"
-        if self.server_url == "http://localhost":
+        self.server_url = url or "http://localhost:5000"
+        if self.server_url.startswith("http://localhost"):
             retry_connect = retry_connect or 1
         else:
             retry_connect = retry_connect or 10
         if self.server_url.endswith("/"):
             self.server_url = self.server_url[:-1]
-        self.server_url += f":{port}"
         self.token = token
         self.headers = urllib3.make_headers(basic_auth=f'token:{self.token}')
         self.headers.update({"Content-Type": "application/json"})
@@ -65,7 +66,13 @@ class OngTsdbClient:
             raise ServerDownException("Server provided an unexpected response. Check if host and port are correct")
 
     def _request(self, method, url, *args, **kwargs):
-        """Execute request adding token to header. Raises Exception if unauthorized"""
+        """Execute request adding token to header. Raises Exception if unauthorized.
+        :param method: get, post, delete...
+        :param url: full url
+        :param headers: optional argument for additional headers to add to default headers
+        :param *args: optional arguments for urlopen
+        :param **kwargs: optional arguments for urlopen
+        """
         if 'headers' in kwargs:
             kwargs['headers'].update(self.headers)
         else:
@@ -129,11 +136,36 @@ class OngTsdbClient:
         success, json = self._post_retval(*args, **kwargs)
         return success
 
+    def exist_db(self, database: str) -> bool:
+        """Returns True if database exists"""
+        try:
+            res = self._request("get", self._make_url(f"/db/{database}"))
+            return True
+        except:
+            return False
+
     def create_db(self, database) -> bool:
         """Creates a new db. Returns true if success"""
         return self._post(self._make_url("/db/") + database)
 
-    def create_sensor(self, database, sensor, period, metrics, read_key, write_key) -> bool:
+    def delete_db(self, database: str) -> bool:
+        """Returns True if database could be deleted"""
+        try:
+            res = self._request("delete", self._make_url(f"/db/{database}"))
+            return True
+        except:
+            return False
+
+    def exist_sensor(self, database: str, sensor: str) -> bool:
+        """Returns True if sensor exists"""
+        try:
+            res = self._request("get", self._make_url(f"/db/{database}/sensor/{sensor}"))
+            return True
+        except:
+            return False
+
+    def create_sensor(self, database, sensor, period, metrics, read_key, write_key, metadata=None,
+                      level_names=None) -> bool:
         """
         Creates a sensor in a database
         :param database: database name
@@ -142,10 +174,26 @@ class OngTsdbClient:
         :param metrics: list of measurements in this sensor
         :param read_key: key for reading from this sensor
         :param write_key: key for writing in this sensor
+        :param metadata: optional dict with metadata (json serializable) to include in the database. If metrics is
+        a list of lists, then the key "level_names" of this dictionary will be used to form the multiindex
+        :param level_names: optional list with level names, that will stored in metadadata as metadata['level_names']
         :return: True on success
         """
-        data = dict(period=period, metrics=metrics, write_key=write_key, read_key=read_key)
+        if metadata is not None and not isinstance(metadata, dict):
+            raise ValueError(f"Wrong metadata type, it must be a dict. Passed metadata={metadata}")
+        if level_names:
+            metadata = metadata or dict()
+            metadata['level_names'] = level_names
+        data = dict(period=period, metrics=metrics, write_key=write_key, read_key=read_key, metadata=metadata)
         return self._post(self._make_url(f"/db/{database}/sensor/{sensor}"), body=ujson.dumps(data).encode())
+
+    def delete_sensor(self, database: str, sensor: str) -> bool:
+        """Returns True if sensor could be deleted"""
+        try:
+            res = self._request("delete", self._make_url(f"/db/{database}/sensor/{sensor}"))
+            return True
+        except:
+            return False
 
     def write(self, sequence: list) -> bool:
         """Writes data to database, using influx format, e.g. a list of strings with the following format:
@@ -199,7 +247,12 @@ class OngTsdbClient:
 
     def get_metrics(self, db, sensor):
         """Returns list of metrics of a sensor"""
-        success, json = self._post_retval(self._make_url(f"/{db}/{sensor}/search"))
+        success, json = self._post_retval(self._make_url(f"/{db}/{sensor}/metrics"))
+        return json if success else None
+
+    def get_metadata(self, db, sensor):
+        """Returns metadata of a sensor"""
+        success, json = self._post_retval(self._make_url(f"/{db}/{sensor}/metadata"))
         return json if success else None
 
     def read_grafana(self, db, sensor, date_from, date_to=None, metrics=None) -> pd.DataFrame:
@@ -254,10 +307,20 @@ class OngTsdbClient:
             df = df.loc[:, metrics]
         return df
 
-    def read(self, db, sensor, date_from, date_to=None, metrics=None) -> pd.DataFrame:
+    def set_level_names(self, db, sensor, level_names):
         """
-        Reads data from db and returns it as a pandas dataframe. Reads it from a local database not using server,
-        so it won't work if database is not hosted in localhost
+        Sets level_names for a sensor (must exist previously)
+        """
+        metadata = self.get_metadata(db, sensor) or dict()
+        metadata['level_names'] = level_names
+        res = self._post(self._make_url(f"/db/{db}/sensor/{sensor}/set_metadata"), body=ujson.dumps(metadata))
+        return res
+
+    def read(self, db, sensor, date_from: pd.Timestamp, date_to: pd.Timestamp = None,
+             metrics: list =None) -> pd.DataFrame:
+        """
+        Reads data from db and returns it as a pandas dataframe.
+        Index is converted to the same TZ as date_from (if no TZ then naive dates are returned)
         :param db: name of db
         :param sensor: name of sensor
         :param date_from: date (datetime alike object) from which data will be read
@@ -275,39 +338,26 @@ class OngTsdbClient:
             end_ts=end_ts,
         ))
 
-        # resp = self._request("post", self._make_url(f"/{db}/{sensor}/read_df"), body=body)
-        # success = resp is not None
-        # if not success:
-        #     return None
-        #
-        # metrics_db = self.get_metrics(db, sensor)
-        # dates_len = int(len(resp.data) / (len(metrics_db) + 2) / np.dtype(DTYPE).itemsize * np.dtype(np.float64).itemsize)
-        # dates = np.frombuffer(resp.data[:dates_len])
-        # values = np.frombuffer(resp.data[dates_len:], dtype=DTYPE)
-
-        # resp = self._request("post", self._make_url(f"/{db}/{sensor}/read_df"), body=body)
-        # metrics_db = self.get_metrics(db, sensor)
-        # bts = base64.decodebytes(resp.data)
-        # dates_len = int(
-        #     len(bts) / (len(metrics_db) + 2) / np.dtype(DTYPE).itemsize * np.dtype(np.float64).itemsize)
-        # # len of dates is the key of the json, value contains concatenated bytes of dates and values
-        # # bts = base64.decodebytes(js_resp[str(dates_len)].encode())
-        # dates = np.frombuffer(bts[:dates_len])
-        # values = np.frombuffer(bts[dates_len:], dtype=DTYPE)
-
         success, js_resp = self._post_retval(self._make_url(f"/{db}/{sensor}/read_df"), body=body)
         # len of dates is the key of the json, value contains concatenated bytes of dates and values
         if not success:
             return None
-        metrics_db = js_resp.pop("metrics").split(",")
+        metrics_db = js_resp.pop("metrics")
+        metadata_db = js_resp.pop("metadata")
+        if metrics_db and isinstance(metrics_db[0], (list, tuple)):
+            level_names = metadata_db.get("level_names") if metadata_db else None
+            metrics_db = pd.MultiIndex.from_tuples(metrics_db, names=level_names)
         dates_len = int(next(iter(js_resp.keys())))
         bts = base64.decodebytes(js_resp[str(dates_len)].encode())
         dates = np.frombuffer(bts[:dates_len])
         values = np.frombuffer(bts[dates_len:], dtype=DTYPE)
         # metrics_db = self.get_metrics(db, sensor)
-
-        values.shape = len(dates), int(values.shape[0] / len(dates))
-        dateindex = pd.to_datetime(dates, unit='s', utc=True).tz_convert(LOCAL_TZ)
+        if len(values) > 0:
+            values.shape = len(dates), int(values.shape[0] / len(dates))
+        if date_from.tz:
+            dateindex = pd.to_datetime(dates, unit='s', utc=True).tz_convert(date_from.tz)
+        else:
+            dateindex = pd.to_datetime(dates, unit='s')
         df = pd.DataFrame(values, index=dateindex, columns=metrics_db)
         if metrics is not None:
             df = df.loc[:, metrics]
