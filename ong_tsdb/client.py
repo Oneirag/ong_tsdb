@@ -245,6 +245,19 @@ class OngTsdbClient:
         else:
             return None
 
+    def get_lastdate(self, db, sensor, tz=None):
+        """Returns last date of data stored for a sensor in a db. If tz=None, then a naive date is returned, else
+        a date converted to the selected TZ is returned"""
+        ts = self.get_lasttimestamp(db, sensor)
+        if ts is None:
+            return None
+        else:
+            utc_date = pd.Timestamp.utcfromtimestamp(ts)
+            if tz is None:
+                return utc_date
+            else:
+                return utc_date.tz_localize("UTC").astimezone(tz)
+
     def get_metrics(self, db, sensor):
         """Returns list of metrics of a sensor"""
         success, json = self._post_retval(self._make_url(f"/{db}/{sensor}/metrics"))
@@ -269,7 +282,7 @@ class OngTsdbClient:
         """
         # Creates a post query with grafana style
         metrics = metrics or self.get_metrics(db, sensor)
-        date_to = date_to or pd.Timestamp.now()
+        date_to = date_to or pd.Timestamp.utcnow()
         data = {
             "range": {
                 "from": date_from.isoformat(),

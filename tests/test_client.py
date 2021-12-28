@@ -107,11 +107,18 @@ class TestOngTsdbClient(TestCase):
         self.assertEqual(len(df_client.index), len(df.index), "Client index length is not correct")
         self.assertTrue((df == df_client).all().all(), "Client df values are not correct")
 
+        # Checks for last timestamp stored in database. Should not raise any exception
+        for client in self.read_client, self.admin_client, self.read_client:
+            last_ts = client.get_lasttimestamp(DB_TEST, sensor_name)
+            last_date = client.get_lastdate(DB_TEST, sensor_name)
+            last_date_local = client.get_lastdate(DB_TEST, sensor_name, LOCAL_TZ)
+            print(f"{client.token=} {sensor_name=} {last_ts=} {last_date=} {last_date_local=}")
         pass
 
     def test_write_data1h_sensor1h(self):
         """Test writing in database each 1 second"""
-        self.write_ts(n_periods=10, data_freq="-1h", sensor_name=get_sensor_name("1h"))
+        sensor_name = get_sensor_name("1h")
+        self.write_ts(n_periods=10, data_freq="-1h", sensor_name=sensor_name)
 
     def test_write_data200d_sensor1h(self):
         """Test writing in database each 1 second"""
@@ -215,6 +222,14 @@ class TestOngTsdbClient(TestCase):
         self.assertFalse(self.write_client.delete_db(db_delete), "Write client deleted a database!")
         self.assertTrue(self.admin_client.delete_db(db_delete), "Admin client could not delete a database!")
         self.assertFalse(self.read_client.exist_db(db_delete), "Database was not deleted!")
+
+    def test_last_timestamp(self):
+        """Test last timestamp functionality"""
+        last_ts = self.admin_client.get_lasttimestamp(DB_TEST, get_sensor_name(self.sensor_freqs[0]))
+        last_ts = self.read_client.get_lasttimestamp(DB_TEST, get_sensor_name(self.sensor_freqs[0]))
+        last_ts = self.write_client.get_lasttimestamp(DB_TEST, get_sensor_name(self.sensor_freqs[0]))
+        print(f"{last_ts=}")
+
 
     def tearDown(self) -> None:
         """Deletes Test Database"""

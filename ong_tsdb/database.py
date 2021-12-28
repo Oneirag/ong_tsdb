@@ -378,7 +378,7 @@ class OngTSDB(object):
         chunks = self.FU.getchunks(db, sensor)
         if len(chunks) == 0:
             return 0
-        dates, _ = self.read(key, db, sensor, float(chunks[-1]))
+        dates, _ = self.read(key, db, sensor, float(chunks[-1].split(".")[0]))
         return dates[-1]
 
     def read(self, key, db, sensor, start_ts=None, end_ts=None):
