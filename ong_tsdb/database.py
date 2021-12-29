@@ -265,8 +265,6 @@ class OngTSDB(object):
         """
         if new_array is None:
             new_array = self.FU.fast_read_np(self.get_FU_path(db, sensor, original_chunk_name), dtype=DTYPE)
-        if compressed:
-            raise NotImplementedError("Compression not implemented")
         f = self.FU.safe_createfile(self.get_FU_path(db, sensor, new_chunk_name), "wb")
         f.write(new_array.tobytes())
         f.close()
