@@ -87,7 +87,7 @@ class TestOngTsdbClient(TestCase):
         df_local = self.read_client.local_read(DB_TEST, sensor_name, min(timestamps))
         timer.toc("Reading from local_read")
         self.assertEqual(len(df_local.index), len(df.index), "Local client index is not correct")
-        self.assertTrue((df == df_local).all().all(), "Local client df values are not correct")
+        self.assertTrue(df.equals(df_local), "Local client df values are not correct")
         print(df)
         for idx, (df_ts, ts) in enumerate(zip(df.index, reversed(timestamps))):
             # if df_ts.timestamp() != ts.timestamp():
@@ -105,7 +105,7 @@ class TestOngTsdbClient(TestCase):
         df_client = self.read_client.read(DB_TEST, sensor_name, min(timestamps), metrics=db_metrics)
         timer.toc("Reading from read")
         self.assertEqual(len(df_client.index), len(df.index), "Client index length is not correct")
-        self.assertTrue((df == df_client).all().all(), "Client df values are not correct")
+        self.assertTrue(df.equals(df_local), "Client df values are not correct")
 
         # Checks for last timestamp stored in database. Should not raise any exception
         for client in self.read_client, self.admin_client, self.read_client:
