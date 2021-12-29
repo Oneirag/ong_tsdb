@@ -44,8 +44,7 @@ class Chunker(object):
         else:
             self.tick_duration = float(freq)
         self.chunk_duration = self.n_rows_per_chunk * self.tick_duration
-        self.retention_policy_chunks = retention_chunks if retention_chunks is not None else \
-            int(config('uncompressed_chunks', -1))
+        self.retention_policy_chunks = retention_chunks or int(config('uncompressed_chunks', -1))
 
     def compressed_by_policy(self, date_ts: float) -> bool:
         """True if the chunk corresponds to a chunk that has to be compressed"""

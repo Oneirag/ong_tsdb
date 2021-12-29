@@ -145,7 +145,7 @@ class OngTSDB(object):
     def exist_sensor(self, key, db, sensor):
         """Checks if a sensor exists in database"""
         if db not in self.db or len(self.db[db].keys()) == 0:
-            return False    # Empty database, no sensor available and auth cannot be checked
+            return False  # Empty database, no sensor available and auth cannot be checked
         self._check_auth(key, Actions.READ, db, sensor)
         if not self.exist_db(key, db) or sensor not in self.db[db].keys() or \
                 not os.path.isdir(self.FU.path(db, sensor)):
@@ -331,7 +331,9 @@ class OngTSDB(object):
         with self._lock:
             if not os.path.isfile(chunk_name):
                 f = self.FU.safe_createfile(chunk_name, 'wb')
-                value_write = np.zeros((chunker.n_rows_per_chunk, cols_chunk_array), dtype=np_values.dtype)
+                # Default values are NaN instead of 0's
+                value_write = np.full((chunker.n_rows_per_chunk, cols_chunk_array),
+                                      fill_value=np.nan, dtype=np_values.dtype)
             else:
                 # Open for read only
                 f = self.FU.get_open_func(chunk_name)(chunk_name, 'rb')
@@ -343,7 +345,8 @@ class OngTSDB(object):
 
             idx_not_nan = np.nonzero(~np.isnan(np_values))  # Write only not nan values
             value_write[pos[idx_not_nan[0]], idx_not_nan[1] + 1] = np_values[idx_not_nan]
-            value_write[pos, -1] = value_write[pos, 1:-1].sum(axis=1)
+            vw = value_write[pos, 1:-1]
+            value_write[pos, -1] = np.ma.masked_array(vw, np.isnan(vw)).sum(axis=1)
             value_write[pos, 0] = pos + 1
             f.write(value_write.tobytes())
             f.close()
@@ -372,12 +375,13 @@ class OngTSDB(object):
         return Chunker(self._getmetadata(key, db, sensor, self.__FREQ_KEY))
 
     def get_last_timestamp(self, key, db, sensor):
-        """Gets the last timestamp (in millis) of the data"""
-        self.exist_sensor(key, db, sensor)
+        """Gets the last timestamp (in millis) of the data, None if no data available"""
+        if not self.exist_sensor(key, db, sensor):
+            return None
         self._check_auth(key, Actions.READ, db, sensor)
         chunks = self.FU.getchunks(db, sensor)
         if len(chunks) == 0:
-            return 0
+            return None
         dates, _ = self.read(key, db, sensor, float(chunks[-1].split(".")[0]))
         return dates[-1]
 
@@ -530,12 +534,13 @@ class OngTSDB(object):
             new_dates = timestamps[idx_filter]
             # Verify checksum
             if len(chunk_value) > 0:
-                checksum_ok = np.isclose(chunk_value[:, 1:-1].sum(1), chunk_value[:, -1])
+                value_check = chunk_value[:, 1:-1]
+                checksum_ok = np.isclose(np.ma.masked_array(value_check, np.isnan(value_check)).sum(1),
+                                         chunk_value[:, -1])
                 if not checksum_ok.all():
                     invalids = (checksum_ok != 0).nonzero()[0]
                     chunk_value = chunk_value[checksum_ok, :]
                     new_dates = new_dates[checksum_ok]
-                    # TODO: do logging
                     logger.warning("Found {} bad checksum(s) in chunk {}".format(len(invalids), file_name))
                     logger.warning("Invalid indexes: ")
                     logger.warning(invalids)
