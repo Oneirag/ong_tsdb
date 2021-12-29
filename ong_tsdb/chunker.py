@@ -47,7 +47,7 @@ class Chunker(object):
         self.retention_policy_chunks = retention_chunks or int(config('uncompressed_chunks', -1))
 
     def compressed_by_policy(self, date_ts: float) -> bool:
-        """True if the chunk corresponds to a chunk that has to be compressed"""
+        """True if the chunk has to be compressed"""
         if self.retention_policy_chunks is None or self.retention_policy_chunks < 0:
             return False
         else:
@@ -59,7 +59,7 @@ class Chunker(object):
 
     def chunk_name(self, timestamp, n_columns, compressed=None):
         if compressed is None:
-            compressed = (time.time() - timestamp) > self.retention_policy_chunks * self.chunk_duration
+            compressed = self.compressed_by_policy(timestamp)
         return generate_filename_from_parts(path="",
                                             timestamp=self.chunk_timestamp(timestamp),
                                             n_columns=n_columns,
