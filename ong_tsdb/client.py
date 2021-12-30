@@ -60,10 +60,13 @@ class OngTsdbClient:
         self.headers.update({"Content-Type": "application/json"})
         self.http = urllib3.PoolManager(retries=urllib3.Retry(total=retry_total, connect=retry_connect,
                                                               backoff_factor=retry_backoff_factor))
-        # Make a connection test to make sure server is running
-        res = self._request("get", self.server_url)
-        if res is None or HELLO_MSG != ujson.loads(res.data).get("msg", ""):
-            raise ServerDownException("Server provided an unexpected response. Check if host and port are correct")
+        # Force reload configuration, that also serves as a connection test to make sure server is running
+        try:
+            res = self.config_reload()
+        except NotAuthorizedException:
+            pass        # Not important
+        except (ServerDownException, WrongAddressException):
+            raise
 
     def _request(self, method, url, *args, **kwargs):
         """Execute request adding token to header. Raises Exception if unauthorized.
@@ -86,7 +89,8 @@ class OngTsdbClient:
             return None
         except (ConnectionError, MaxRetryError, TimeoutError):
             logger.error(f"Cannot connect to {url}")
-            raise ServerDownException("Cannot connect to server, check if server is running")
+            raise ServerDownException(f"Cannot connect to server in address={url}, check if server is running or server"
+                                      f" url={self.server_url} used in constructor is correct and includes port ")
         except Exception as e:
             logger.exception(e)
             logger.exception(f"Error reading {url}. Maybe server is down")
