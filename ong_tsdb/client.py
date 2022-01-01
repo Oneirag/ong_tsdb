@@ -334,7 +334,7 @@ class OngTsdbClient:
         return res
 
     def read(self, db, sensor, date_from: pd.Timestamp, date_to: pd.Timestamp = None,
-             metrics: list =None) -> pd.DataFrame:
+             metrics: list = None) -> pd.DataFrame:
         """
         Reads data from db and returns it as a pandas dataframe.
         Index is converted to the same TZ as date_from (if no TZ then naive dates are returned)
@@ -377,11 +377,14 @@ class OngTsdbClient:
             values.shape = len(dates), int(values.shape[0] / len(dates))
         else:
             values = None
-            values = None
         df = pd.DataFrame(values, index=dateindex, columns=metrics_db)
         if metrics is not None:
             df = df.loc[:, metrics]
         return df
+
+    def __del__(self):
+        """Forces http pool manager to be cleared (to avoid warning in unittest)"""
+        self.http.clear()
 
 
 if __name__ == '__main__':
