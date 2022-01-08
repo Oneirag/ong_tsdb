@@ -9,6 +9,7 @@ from ong_tsdb import config, logger, LOCAL_TZ, DTYPE, HELLO_MSG
 from ong_tsdb.database import OngTSDB
 from urllib3.exceptions import MaxRetryError, TimeoutError, ConnectionError
 from ong_utils.timers import OngTimer
+from ong_utils.urllib3 import create_pool_manager
 import numpy as np
 
 
@@ -58,12 +59,14 @@ class OngTsdbClient:
         self.token = token
         self.headers = urllib3.make_headers(basic_auth=f'token:{self.token}')
         self.headers.update({"Content-Type": "application/json"})
-        self.http = urllib3.PoolManager(retries=urllib3.Retry(total=retry_total, connect=retry_connect,
-                                                              backoff_factor=retry_backoff_factor))
-        # Make a connection test to make sure server is running
-        res = self._request("get", self.server_url)
-        if res is None or HELLO_MSG != ujson.loads(res.data).get("msg", ""):
-            raise ServerDownException("Server provided an unexpected response. Check if host and port are correct")
+        self.http = create_pool_manager(total=retry_total, connect=retry_connect, backoff_factor=retry_backoff_factor)
+        # Force reload configuration, that also serves as a connection test to make sure server is running
+        try:
+            res = self.config_reload()
+        except NotAuthorizedException:
+            pass        # Not important
+        except (ServerDownException, WrongAddressException):
+            raise
 
     def _request(self, method, url, *args, **kwargs):
         """Execute request adding token to header. Raises Exception if unauthorized.
@@ -86,7 +89,8 @@ class OngTsdbClient:
             return None
         except (ConnectionError, MaxRetryError, TimeoutError):
             logger.error(f"Cannot connect to {url}")
-            raise ServerDownException("Cannot connect to server, check if server is running")
+            raise ServerDownException(f"Cannot connect to server in address={url}, check if server is running or server"
+                                      f" url={self.server_url} used in constructor is correct and includes port ")
         except Exception as e:
             logger.exception(e)
             logger.exception(f"Error reading {url}. Maybe server is down")
@@ -330,7 +334,7 @@ class OngTsdbClient:
         return res
 
     def read(self, db, sensor, date_from: pd.Timestamp, date_to: pd.Timestamp = None,
-             metrics: list =None) -> pd.DataFrame:
+             metrics: list = None) -> pd.DataFrame:
         """
         Reads data from db and returns it as a pandas dataframe.
         Index is converted to the same TZ as date_from (if no TZ then naive dates are returned)
@@ -373,11 +377,14 @@ class OngTsdbClient:
             values.shape = len(dates), int(values.shape[0] / len(dates))
         else:
             values = None
-            values = None
         df = pd.DataFrame(values, index=dateindex, columns=metrics_db)
         if metrics is not None:
             df = df.loc[:, metrics]
         return df
+
+    def __del__(self):
+        """Forces http pool manager to be cleared (to avoid warning in unittest)"""
+        self.http.clear()
 
 
 if __name__ == '__main__':
