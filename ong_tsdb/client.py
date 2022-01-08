@@ -9,6 +9,7 @@ from ong_tsdb import config, logger, LOCAL_TZ, DTYPE, HELLO_MSG
 from ong_tsdb.database import OngTSDB
 from urllib3.exceptions import MaxRetryError, TimeoutError, ConnectionError
 from ong_utils.timers import OngTimer
+from ong_utils.urllib3 import create_pool_manager
 import numpy as np
 
 
@@ -58,8 +59,7 @@ class OngTsdbClient:
         self.token = token
         self.headers = urllib3.make_headers(basic_auth=f'token:{self.token}')
         self.headers.update({"Content-Type": "application/json"})
-        self.http = urllib3.PoolManager(retries=urllib3.Retry(total=retry_total, connect=retry_connect,
-                                                              backoff_factor=retry_backoff_factor))
+        self.http = create_pool_manager(total=retry_total, connect=retry_connect, backoff_factor=retry_backoff_factor)
         # Force reload configuration, that also serves as a connection test to make sure server is running
         try:
             res = self.config_reload()
