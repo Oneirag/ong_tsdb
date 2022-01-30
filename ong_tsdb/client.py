@@ -368,7 +368,7 @@ class OngTsdbClient:
         dates_len = int(next(iter(js_resp.keys())))
         # Processes answer taking into account compression
         resp_data = js_resp[str(dates_len)].encode("ISO-8859-1")
-        if dates_len > HTTP_COMPRESS_THRESHOLD:
+        if js_resp.get("compressed", False):
             resp_data = zlib.decompress(resp_data)
         bts = base64.decodebytes(resp_data)
 

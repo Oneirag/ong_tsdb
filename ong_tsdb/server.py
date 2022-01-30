@@ -296,15 +296,16 @@ def read_df(db_name, sensor_name, key=None):
         metadata = _db.get_metadata(key, db_name, sensor_name)
         # return encoded_numpy and the list of metrics
         # if more than 1024 data, compress JUST DATA to send it faster if client headers asked for it
-        if len(bytes_dates) > HTTP_COMPRESS_THRESHOLD and request.headers.get("content-encoding", "") == "gzip":
+        compressed = len(bytes_dates) > HTTP_COMPRESS_THRESHOLD and request.headers.get("content-encoding", "") == "gzip"
+        if compressed:
             encoded_numpy = zlib.compress(encoded_numpy)
         key_data = str(len(bytes_dates))
         retval = {
             key_data: encoded_numpy.decode("ISO-8859-1"),
             "metrics": metrics,
             "metadata": metadata,
+            "compressed": compressed,
         }
-
         return retval
     else:
         return make_js_response("No data", 404)
