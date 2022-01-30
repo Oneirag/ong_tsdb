@@ -18,7 +18,7 @@ from flask import Flask, jsonify, request, stream_with_context
 from gevent.pywsgi import WSGIServer
 from werkzeug.exceptions import HTTPException, Unauthorized
 
-from ong_tsdb import config, DTYPE, HELLO_MSG
+from ong_tsdb import config, DTYPE, HELLO_MSG, HTTP_COMPRESS_THRESHOLD
 from ong_tsdb.database import OngTSDB, NotAuthorizedException
 from ong_tsdb.server_utils import split_influx
 
@@ -227,7 +227,6 @@ def write_point_list(key: str, point_list: list) -> None:
             np_ts = np.array(metrics_ts)
             _db.write_tick_numpy(key, db_meter_data.db, db_meter_data.sensor, np_values, np_ts)
 
-
 @app.route('/influx', methods=["POST"])
 @auth_required
 def write_point(key):
@@ -296,11 +295,16 @@ def read_df(db_name, sensor_name, key=None):
         metrics = _db.get_metrics(key, db_name, sensor_name)
         metadata = _db.get_metadata(key, db_name, sensor_name)
         # return encoded_numpy and the list of metrics
+        # if more than 1024 data, compress JUST DATA to send it faster if client headers asked for it
+        if len(bytes_dates) > HTTP_COMPRESS_THRESHOLD and request.headers.get("content-encoding", "") == "gzip":
+            encoded_numpy = zlib.compress(encoded_numpy)
+        key_data = str(len(bytes_dates))
         retval = {
-            str(len(bytes_dates)): encoded_numpy.decode(),
+            key_data: encoded_numpy.decode("ISO-8859-1"),
             "metrics": metrics,
             "metadata": metadata,
         }
+
         return retval
     else:
         return make_js_response("No data", 404)

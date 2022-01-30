@@ -5,7 +5,7 @@ import base64
 import pandas as pd
 import ujson
 import urllib3
-from ong_tsdb import config, logger, LOCAL_TZ, DTYPE, HELLO_MSG
+from ong_tsdb import config, logger, LOCAL_TZ, DTYPE, HELLO_MSG, HTTP_COMPRESS_THRESHOLD
 from ong_tsdb.database import OngTSDB
 from urllib3.exceptions import MaxRetryError, TimeoutError, ConnectionError
 from ong_utils.timers import OngTimer
@@ -132,7 +132,7 @@ class OngTsdbClient:
         do_gzip = kwargs.pop("gzip", True)
         if "body" in kwargs:
             body = kwargs['body']
-            if do_gzip and len(body) > 1024:
+            if do_gzip and len(body) > HTTP_COMPRESS_THRESHOLD:
                 kwargs['headers'] = {'content-encoding': 'gzip'}
                 timer.tic("Gzipping body")
                 kwargs['body'] = zlib.compress(body)
@@ -355,7 +355,8 @@ class OngTsdbClient:
             end_ts=end_ts,
         ))
 
-        success, js_resp = self._post_retval(self._make_url(f"/{db}/{sensor}/read_df"), body=body)
+        success, js_resp = self._post_retval(self._make_url(f"/{db}/{sensor}/read_df"), body=body,
+                                             headers={"Content-Encoding": "gzip"})
         # len of dates is the key of the json, value contains concatenated bytes of dates and values
         if not success:
             return None
@@ -365,7 +366,12 @@ class OngTsdbClient:
             level_names = metadata_db.get("level_names") if metadata_db else None
             metrics_db = pd.MultiIndex.from_tuples(metrics_db, names=level_names)
         dates_len = int(next(iter(js_resp.keys())))
-        bts = base64.decodebytes(js_resp[str(dates_len)].encode())
+        # Processes answer taking into account compression
+        resp_data = js_resp[str(dates_len)].encode("ISO-8859-1")
+        if dates_len > HTTP_COMPRESS_THRESHOLD:
+            resp_data = zlib.decompress(resp_data)
+        bts = base64.decodebytes(resp_data)
+
         dates = np.frombuffer(bts[:dates_len])
         values = np.frombuffer(bts[dates_len:], dtype=DTYPE)
         # metrics_db = self.get_metrics(db, sensor)
