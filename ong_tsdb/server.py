@@ -18,7 +18,7 @@ from flask import Flask, jsonify, request, stream_with_context
 from gevent.pywsgi import WSGIServer
 from werkzeug.exceptions import HTTPException, Unauthorized
 
-from ong_tsdb import config, DTYPE, HELLO_MSG, HTTP_COMPRESS_THRESHOLD
+from ong_tsdb import config, DTYPE, HELLO_MSG, HTTP_COMPRESS_THRESHOLD, logger
 from ong_tsdb.database import OngTSDB, NotAuthorizedException
 from ong_tsdb.server_utils import split_influx
 
@@ -390,11 +390,28 @@ def grafana_get_md5(filename):
     return jsonify(_db.get_mdf5(filename))
 
 
+def find_available_port(initial_port, end_port=9999) -> int:
+    """Tries to bind to a port, if not possible increments by one until a free port is found"""
+    initial_port = int(initial_port)
+    import socket
+    for port in range(initial_port, end_port + 1):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if not s.connect_ex(('localhost', port)) == 0:     # Port NOT in use
+                if port != initial_port:
+                    logger.info(f"Port {initial_port} is in use. Using next available port: {port}")
+                return port
+    raise ConnectionRefusedError(f"No available ports in range from {initial_port} to {end_port}")
+
+
 if __name__ == '__main__':
     if sys.gettrace() is None:
         # No debug mode
-        http_server = WSGIServer((config('host'), config('port')), app)
+        host = config('host')
+        port = find_available_port(config('port'))
+        http_server = WSGIServer((host, port), app)
         http_server.serve_forever()
     else:
         # Debug mode, using test port and test host if available (otherwise host and port)
-        app.run(config('test_host', config('host')), config('test_port', config('port')), debug=True)
+        host = config('test_host', config('host'))
+        port = find_available_port(config('test_port', config('port')))
+        app.run(host, port, debug=True)
