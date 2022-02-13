@@ -359,7 +359,8 @@ def grafana_query_chunked(db_name, sensor_name, key=""):
                     dt = dates[i]
                     if dt >= start_t:
                         for t in targets:
-                            res[t].append("[%f,%f]" % (values[i, metrics.index(t)], dt * 1000))
+                            if not pd.isna(values[i, metrics.index(t)]):
+                                res[t].append("[%f,%f]" % (values[i, metrics.index(t)], dt * 1000))
                         while start_t < dt:
                             start_t += tick_time_spread or tick_duration
                         n_data_read += 1
