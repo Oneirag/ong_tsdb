@@ -15,3 +15,4 @@ DTYPE = np.float64
 DTYPE = np.float32  # Now trying storing not the full TS but the offset with the TS start...
 CHUNK_ROWS = 2 ** 14
 HELLO_MSG = "Hello from Ong_Tsdb server"
+HTTP_COMPRESS_THRESHOLD = 1024      # Minimun number of data to activate compression in client and server

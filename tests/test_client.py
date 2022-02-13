@@ -1,13 +1,13 @@
 import time
 from unittest import TestCase, main
 
-import pandas as pd
 import numpy as np
+import pandas as pd
+from ong_utils import OngTimer, is_debugging
 
 from ong_tsdb import config, LOCAL_TZ
 from ong_tsdb.client import OngTsdbClient
 from ong_tsdb.database import OngTSDB
-from ong_utils import OngTimer
 
 DB_TEST = "testing_database"
 timer = OngTimer()
@@ -19,9 +19,13 @@ def get_sensor_name(freq):
 
 class TestOngTsdbClient(TestCase):
     _db = OngTSDB()
-    admin_client = OngTsdbClient(url=config('url'), token=config('admin_token'))
-    read_client = OngTsdbClient(url=config('url'), token=config('read_token'))
-    write_client = OngTsdbClient(url=config('url'), token=config('write_token'))
+    _debug = is_debugging()
+    url = config('url', "http://{host}:{port}".format(
+        host=config('test_host' if _debug else config('host'), config('host')),
+        port=config('test_port' if _debug else 'port', config('port'))))
+    admin_client = OngTsdbClient(url=url, token=config('admin_token'))
+    read_client = OngTsdbClient(url=url, token=config('read_token'))
+    write_client = OngTsdbClient(url=url, token=config('write_token'))
     admin_key = config("admin_token")
     write_key = config("write_token")
     read_key = config("read_token")
@@ -173,10 +177,10 @@ class TestOngTsdbClient(TestCase):
         self.assertEqual(dict(level_names=level_names), metadata_db, "Incorrect metadata")
         # Same test with different types of timestamps
         for now in (
-                pd.Timestamp.utcnow().normalize().tz_convert(LOCAL_TZ),     # Date in LOCAL_TZ
-                pd.Timestamp.now().normalize(),                             # Naive date
-                pd.Timestamp.utcnow().normalize(),                          # Naive UTC date
-                ):
+                pd.Timestamp.utcnow().normalize().tz_convert(LOCAL_TZ),  # Date in LOCAL_TZ
+                pd.Timestamp.now().normalize(),  # Naive date
+                pd.Timestamp.utcnow().normalize(),  # Naive UTC date
+        ):
             df_write = pd.DataFrame([[1.0, 2.0]], columns=pd.MultiIndex.from_tuples(metrics,
                                                                                     names=level_names), index=[now])
             self.write_client.write_df(DB_TEST, metadata_sensor, df_write)
@@ -229,7 +233,6 @@ class TestOngTsdbClient(TestCase):
         last_ts = self.read_client.get_lasttimestamp(DB_TEST, get_sensor_name(self.sensor_freqs[0]))
         last_ts = self.write_client.get_lasttimestamp(DB_TEST, get_sensor_name(self.sensor_freqs[0]))
         print(f"{last_ts=}")
-
 
     def tearDown(self) -> None:
         """Deletes Test Database"""

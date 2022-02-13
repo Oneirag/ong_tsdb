@@ -1,3 +1,4 @@
+import logging
 import sys
 
 import ujson
@@ -18,10 +19,13 @@ from flask import Flask, jsonify, request, stream_with_context
 from gevent.pywsgi import WSGIServer
 from werkzeug.exceptions import HTTPException, Unauthorized
 
-from ong_tsdb import config, DTYPE, HELLO_MSG
+from ong_tsdb import config, DTYPE, HELLO_MSG, HTTP_COMPRESS_THRESHOLD, logger
 from ong_tsdb.database import OngTSDB, NotAuthorizedException
 from ong_tsdb.server_utils import split_influx
+from ong_utils import OngTimer, is_debugging, find_available_port
 
+time_it = OngTimer(enabled=is_debugging(), logger=logger,
+                   log_level=logging.DEBUG if not is_debugging() else logging.INFO)
 _db = OngTSDB()
 
 app = Flask(__name__)
@@ -227,7 +231,6 @@ def write_point_list(key: str, point_list: list) -> None:
             np_ts = np.array(metrics_ts)
             _db.write_tick_numpy(key, db_meter_data.db, db_meter_data.sensor, np_values, np_ts)
 
-
 @app.route('/influx', methods=["POST"])
 @auth_required
 def write_point(key):
@@ -281,25 +284,29 @@ def read_df(db_name, sensor_name, key=None):
     start_ts = payload['start_ts']
     end_ts = payload.get('end_ts', None)
 
-    dates, values = _db.read(key, db_name, sensor_name, start_ts=start_ts, end_ts=end_ts)
+    with time_it.context_manager("Reading data"):
+        dates, values = _db.read(key, db_name, sensor_name, start_ts=start_ts, end_ts=end_ts)
 
     if dates is not None:
-
-        # buff = io.BytesIO()
-        # buff.write(dates.tobytes())
-        # buff.write(values.tobytes())
-        # buff.seek(0)
-        # return send_file(buff, download_name=str(len(dates)))
-        bytes_dates = dates.tobytes()
-        bytes_values = values.tobytes()
-        encoded_numpy = encodebytes(bytes_dates + bytes_values)  # .decode()
-        metrics = _db.get_metrics(key, db_name, sensor_name)
-        metadata = _db.get_metadata(key, db_name, sensor_name)
+        with time_it.context_manager("Converting to bytes"):
+            bytes_dates = dates.tobytes()
+            bytes_values = values.tobytes()
+            encoded_numpy = encodebytes(bytes_dates + bytes_values)  # .decode()
+        with time_it.context_manager("Reading metrics and metadata"):
+            metrics = _db.get_metrics(key, db_name, sensor_name)
+            metadata = _db.get_metadata(key, db_name, sensor_name)
         # return encoded_numpy and the list of metrics
+        # if more than 1024 data, compress JUST DATA to send it faster if client headers asked for it
+        compressed = len(bytes_dates) > HTTP_COMPRESS_THRESHOLD and request.headers.get("content-encoding", "") == "gzip"
+        with time_it.context_manager("Compressing"):
+            if compressed:
+                encoded_numpy = zlib.compress(encoded_numpy)
+        key_data = str(len(bytes_dates))
         retval = {
-            str(len(bytes_dates)): encoded_numpy.decode(),
+            key_data: encoded_numpy.decode("ISO-8859-1"),
             "metrics": metrics,
             "metadata": metadata,
+            "compressed": compressed,
         }
         return retval
     else:
@@ -352,7 +359,8 @@ def grafana_query_chunked(db_name, sensor_name, key=""):
                     dt = dates[i]
                     if dt >= start_t:
                         for t in targets:
-                            res[t].append("[%f,%f]" % (values[i, metrics.index(t)], dt * 1000))
+                            if not pd.isna(values[i, metrics.index(t)]):
+                                res[t].append("[%f,%f]" % (values[i, metrics.index(t)], dt * 1000))
                         while start_t < dt:
                             start_t += tick_time_spread or tick_duration
                         n_data_read += 1
@@ -389,8 +397,12 @@ def grafana_get_md5(filename):
 if __name__ == '__main__':
     if sys.gettrace() is None:
         # No debug mode
-        http_server = WSGIServer((config('host'), config('port')), app)
+        host = config('host')
+        port = find_available_port(config('port'), logger=logger)
+        http_server = WSGIServer((host, port), app)
         http_server.serve_forever()
     else:
         # Debug mode, using test port and test host if available (otherwise host and port)
-        app.run(config('test_host', config('host')), config('test_port', config('port')), debug=True)
+        host = config('test_host', config('host'))
+        port = find_available_port(config('test_port', config('port')), logger=logger)
+        app.run(host, port, debug=True)
