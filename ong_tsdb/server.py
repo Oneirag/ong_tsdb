@@ -1,3 +1,4 @@
+import logging
 import sys
 
 import ujson
@@ -21,7 +22,10 @@ from werkzeug.exceptions import HTTPException, Unauthorized
 from ong_tsdb import config, DTYPE, HELLO_MSG, HTTP_COMPRESS_THRESHOLD, logger
 from ong_tsdb.database import OngTSDB, NotAuthorizedException
 from ong_tsdb.server_utils import split_influx
+from ong_utils import OngTimer, is_debugging, find_available_port
 
+time_it = OngTimer(enabled=is_debugging(), logger=logger,
+                   log_level=logging.DEBUG if not is_debugging() else logging.INFO)
 _db = OngTSDB()
 
 app = Flask(__name__)
@@ -280,25 +284,23 @@ def read_df(db_name, sensor_name, key=None):
     start_ts = payload['start_ts']
     end_ts = payload.get('end_ts', None)
 
-    dates, values = _db.read(key, db_name, sensor_name, start_ts=start_ts, end_ts=end_ts)
+    with time_it.context_manager("Reading data"):
+        dates, values = _db.read(key, db_name, sensor_name, start_ts=start_ts, end_ts=end_ts)
 
     if dates is not None:
-
-        # buff = io.BytesIO()
-        # buff.write(dates.tobytes())
-        # buff.write(values.tobytes())
-        # buff.seek(0)
-        # return send_file(buff, download_name=str(len(dates)))
-        bytes_dates = dates.tobytes()
-        bytes_values = values.tobytes()
-        encoded_numpy = encodebytes(bytes_dates + bytes_values)  # .decode()
-        metrics = _db.get_metrics(key, db_name, sensor_name)
-        metadata = _db.get_metadata(key, db_name, sensor_name)
+        with time_it.context_manager("Converting to bytes"):
+            bytes_dates = dates.tobytes()
+            bytes_values = values.tobytes()
+            encoded_numpy = encodebytes(bytes_dates + bytes_values)  # .decode()
+        with time_it.context_manager("Reading metrics and metadata"):
+            metrics = _db.get_metrics(key, db_name, sensor_name)
+            metadata = _db.get_metadata(key, db_name, sensor_name)
         # return encoded_numpy and the list of metrics
         # if more than 1024 data, compress JUST DATA to send it faster if client headers asked for it
         compressed = len(bytes_dates) > HTTP_COMPRESS_THRESHOLD and request.headers.get("content-encoding", "") == "gzip"
-        if compressed:
-            encoded_numpy = zlib.compress(encoded_numpy)
+        with time_it.context_manager("Compressing"):
+            if compressed:
+                encoded_numpy = zlib.compress(encoded_numpy)
         key_data = str(len(bytes_dates))
         retval = {
             key_data: encoded_numpy.decode("ISO-8859-1"),
@@ -391,28 +393,15 @@ def grafana_get_md5(filename):
     return jsonify(_db.get_mdf5(filename))
 
 
-def find_available_port(initial_port, end_port=9999) -> int:
-    """Tries to bind to a port, if not possible increments by one until a free port is found"""
-    initial_port = int(initial_port)
-    import socket
-    for port in range(initial_port, end_port + 1):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if not s.connect_ex(('localhost', port)) == 0:     # Port NOT in use
-                if port != initial_port:
-                    logger.info(f"Port {initial_port} is in use. Using next available port: {port}")
-                return port
-    raise ConnectionRefusedError(f"No available ports in range from {initial_port} to {end_port}")
-
-
 if __name__ == '__main__':
     if sys.gettrace() is None:
         # No debug mode
         host = config('host')
-        port = find_available_port(config('port'))
+        port = find_available_port(config('port'), logger=logger)
         http_server = WSGIServer((host, port), app)
         http_server.serve_forever()
     else:
         # Debug mode, using test port and test host if available (otherwise host and port)
         host = config('test_host', config('host'))
-        port = find_available_port(config('test_port', config('port')))
+        port = find_available_port(config('test_port', config('port')), logger=logger)
         app.run(host, port, debug=True)
