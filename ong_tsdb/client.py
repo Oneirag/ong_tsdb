@@ -9,9 +9,8 @@ from ong_tsdb import config, logger, LOCAL_TZ, DTYPE, HELLO_MSG, HTTP_COMPRESS_T
 from ong_tsdb.database import OngTSDB
 from urllib3.exceptions import MaxRetryError, TimeoutError, ConnectionError
 from ong_utils.timers import OngTimer
-from ong_utils.urllib3 import create_pool_manager
+from ong_utils.urllib3 import create_pool_manager, get_cookies, cookies2header
 import numpy as np
-
 
 timer = OngTimer(False)
 
@@ -21,8 +20,16 @@ class OngTsdbClientBaseException(Exception):
 
 
 class NotAuthorizedException(OngTsdbClientBaseException):
-    """Exception raised when 401 error is received from sever"""
+    """Exception raised when 401 error is received from server"""
     pass
+
+
+class ProxyNotAuthorizedException(OngTsdbClientBaseException):
+    """Exception raised when 407 error is received from server. Stores failed response for later use"""
+
+    def __init__(self, msg, response):
+        super().__init__(msg)
+        self.response = response
 
 
 class ServerDownException(OngTsdbClientBaseException):
@@ -37,7 +44,8 @@ class WrongAddressException(OngTsdbClientBaseException):
 
 class OngTsdbClient:
 
-    def __init__(self, url: str, token: str, retry_total=20, retry_connect=None, retry_backoff_factor=.2, **kwargs):
+    def __init__(self, url: str, token: str, retry_total=20, retry_connect=None, retry_backoff_factor=.2,
+                 proxy_auth_body: dict = None, **kwargs):
         """
         Initializes client. It needs just an url (that includes port, parameter port is kept for backward compatibility
          but it is not used anymore) and a token.
@@ -48,7 +56,12 @@ class OngTsdbClient:
         :param retry_total: param total for urllib3.Retry. Defaults to 20
         :param retry_connect: param connect for urllib3.Retry. Defaults to 10 if host is not localhost else 1
         :param retry_backoff_factor: param backoff_factor for urllib3.Retry. Defaults to 0.2
+        :param proxy_auth_body: and optional dict with the body to be sent to the auth proxy (if ongtsdb is behind a
+        server with authentication, this is the body to be posted to the login page)
         """
+        if proxy_auth_body is None:
+            proxy_auth_body = dict()
+        self.proxy_auth_body = proxy_auth_body
         self.server_url = url or "http://localhost:5000"
         if self.server_url.startswith("http://localhost"):
             retry_connect = retry_connect or 1
@@ -61,12 +74,41 @@ class OngTsdbClient:
         self.headers.update({"Content-Type": "application/json"})
         self.http = create_pool_manager(total=retry_total, connect=retry_connect, backoff_factor=retry_backoff_factor)
         # Force reload configuration, that also serves as a connection test to make sure server is running
-        try:
-            res = self.config_reload()
-        except NotAuthorizedException:
-            pass        # Not important
-        except (ServerDownException, WrongAddressException):
-            raise
+        for attempt in range(2):
+            try:
+                res = self.config_reload()
+                break
+            except NotAuthorizedException:
+                pass  # Not important
+                break
+            except ProxyNotAuthorizedException as pnae:
+                """Needs to send proxy authentication. 
+                It will only be sent if server responds with application/json
+                Response body will be compose of form field received from server (if any) updated with
+                the proxy_auth_body dictionary"""
+                if pnae.response.getheader("content-type").startswith("application/json"):
+                    js_resp = ujson.loads(pnae.response.data)
+                    url = js_resp.get("url")
+                    body = js_resp.get("form", dict())
+                    body.update(self.proxy_auth_body)
+                    # body = ujson.dumps(self.proxy_auth_body)
+                    cookies = get_cookies(pnae.response)
+                    headers = dict(**self.headers, **cookies2header(cookies))
+                    res = self.http.request("POST", self._make_url(url), headers=headers, body=ujson.dumps(body))
+                    if res.data and res.headers.get("content-type").startswith("application/json")\
+                            and ujson.loads(res.data).get("http_code") == 200:
+                        cookies = get_cookies(res)
+                        self.headers.update(cookies2header(cookies))
+                    else:
+                        logger.debug(f"Could not log in, response = {res.data}")
+                        raise pnae
+                    continue
+                else:
+                    logger.debug(f"Proxy auth response not understood, needs a json with form and url fields. "
+                                 f"Received {pnae.response.data}")
+                    raise pnae
+            except (ServerDownException, WrongAddressException):
+                break
 
     def _request(self, method, url, *args, **kwargs):
         """Execute request adding token to header. Raises Exception if unauthorized.
@@ -82,8 +124,8 @@ class OngTsdbClient:
             kwargs['headers'] = self.headers
         retval = None
         try:
-            # retval = self.http.request(method, url, *args, **kwargs)
-            retval = self.http.urlopen(method, url, *args, **kwargs)
+            retval = self.http.request(method, url, *args, **kwargs)
+            # retval = self.http.urlopen(method, url, *args, **kwargs)
         except OngTsdbClientBaseException as e:
             logger.exception(e)
             return None
@@ -98,7 +140,15 @@ class OngTsdbClient:
         # Check retval
         if retval:
             if retval.status == 401:
-                raise NotAuthorizedException(f"Unauthorized, your token {self.token} is invalid for {url}")
+                if "json" in retval.headers.get("Content-Type"):
+                    js_res = ujson.loads(retval.data)
+                    if js_res.get("http_code") == 407:
+                        raise ProxyNotAuthorizedException(
+                            f"Unauthorized, you need to set up a user and password for the proxy",
+                            response=retval)
+                raise NotAuthorizedException(f"Unauthorized, your token '{self.token}' is invalid for {url}")
+            if retval.status == 407:
+                raise ProxyNotAuthorizedException(f"Unauthorized, you need to set up a user and password for the proxy")
             elif retval.status == 404:
                 raise WrongAddressException(f"Error 404 in {url}")
         return retval
@@ -346,9 +396,9 @@ class OngTsdbClient:
         :param metrics: list of metrics to read (all metrics if not given)
         :return: a pandas dataframe
         """
-        #_db = OngTSDB()
+        # _db = OngTSDB()
         end_ts = date_to.timestamp() if date_to else None
-        #metrics = ",".join(metrics) if metrics else None
+        # metrics = ",".join(metrics) if metrics else None
 
         body = ujson.dumps(dict(
             start_ts=date_from.timestamp(),
@@ -408,4 +458,3 @@ if __name__ == '__main__':
                       f"ejemplo,circuit=sensor1 reactive=15,active=16,nueva=17 {ts}",
                       ])
         time.sleep(1)
-
