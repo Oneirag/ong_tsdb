@@ -5,8 +5,8 @@ with open('requirements.txt') as f:
 
 setup(
     name='ong_tsdb',
-    version='0.6.1',
-    packages=['ong_tsdb', "ong_tsdb.exceptions"],
+    version='0.6.2',
+    packages=['ong_tsdb'],
     url='www.neirapinuela.es',
     license='',
     author='Oscar Neira Garcia',
