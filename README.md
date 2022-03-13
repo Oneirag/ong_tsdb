@@ -102,6 +102,41 @@ admin_client.create_sensor("name_of_database", "name_of_sensor_wk", "7d", [["A",
                            read_key=config("read_token"), write_key=config("write_token"))
 
 ```
+### Remote authentication
+If client is in a remote server that needs its own authentication previous to the ongtsdb_authentication, this can be 
+done by supplying the extra authentication parameters for a post request (as a dict) with the `proxy_auth_body` 
+parameter
+
+```python
+from ong_tsdb import config
+from ong_tsdb.client import OngTsdbClient
+
+admin_client = OngTsdbClient(url=config('url'), token=config('admin_token'),
+                             proxy_auth_body=dict(username=config("username"),
+                                                  password=config("password")))
+
+```
+### Reusing client connection with different token
+If a client connection wants to be reused with a different token, e.g. for being behind a proxy
+with a TOTP MFA authentication and do not want to wait for the new token generation,
+the `update_token` method can be used:
+
+```python
+from ong_tsdb import config
+from ong_tsdb.client import OngTsdbClient
+
+client = OngTsdbClient(url=config('url'), token=config('admin_token'),
+                             proxy_auth_body=dict(username=config("username"),
+                                                  password=config("password"),
+                                                  mfa=input("MFA code")))
+# Do whatever with the admin client
+# ...
+
+client.update_token(config("read_token"))   # Now client is a read client, reusing connection
+# Do whatever with the read client
+# ...
+```
+
 
 
 ### Ingesting data
