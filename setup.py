@@ -15,7 +15,7 @@ setup(
     install_requires=required,
     entry_points={
         'console_scripts': [
-            'ong_tsdb_server = ong_tsdb.main:main',
+            'ong_tsdb_server = ong_tsdb.server:main',
         ],
     }
 )
