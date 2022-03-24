@@ -93,6 +93,41 @@ ong_tsdb_server
 ```
 Both are equivalent
 
+### Create server and run it (in google colab)
+This section explains how to create a persistent server in google colab that persists data in google drive.
+
+First, mount google drive, install library and set environment variable to point to google drive.
+````python
+# Mount google drive
+from google.colab import drive
+drive.mount('/content/gdrive')
+
+# install ong_tsdb
+!pip install git+https://github.com/Oneirag/ong_tsdb.git
+# set environ variable to make config persistent
+%env ONG_CONFIG_PATH=/content/gdrive/MyDrive/.config/ongpi
+````
+If it is the first execution, edit the config file `/content/gdrive/MyDrive/.config/ongpi/ong_tsdb.yaml` 
+with this recommended configuration:
+```yaml
+log: 
+ong_tsdb: 
+  host: localhost
+  port: 5000
+  BASE_DIR: /content/gdrive/MyDrive/ong_tsdb
+  admin_token: whatever_you_want_here 
+  read_token: whatever_you_want_here
+  write_token: whatever_you_want_here
+  uncompressed_chunks: 10
+```
+
+Then, to start server in background, in a single cell run:
+```python
+%%python3 --bg --out output
+
+from ong_tsdb.server import main
+main()
+```
 
 ### Import client, create db and sensors
 ```python
