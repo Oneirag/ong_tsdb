@@ -242,7 +242,7 @@ class FileUtils(object):
                                                        print_summary_stats=print_per_chunk_data)
                     total_data += stat["rows_used"]
                 print()
-                print(f"Summary for {db_name=} {sensor=}")
+                print(f"Summary for db_name={db_name} sensor={sensor}")
                 print(f"Number of chunks: {len(chunkfiles)}")
                 print(f"Number of used rows: {total_data}")
                 print()

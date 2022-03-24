@@ -13,4 +13,9 @@ setup(
     author_email='oneirag@yahoo.es',
     description='Simple Time Series DataBase, based on plain files and fixed interval data',
     install_requires=required,
+    entry_points={
+        'console_scripts': [
+            'ong_tsdb_server = ong_tsdb.main:main',
+        ],
+    }
 )
