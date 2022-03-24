@@ -5,7 +5,7 @@ with open('requirements.txt') as f:
 
 setup(
     name='ong_tsdb',
-    version='0.6.3',
+    version='0.6.4',
     packages=['ong_tsdb'],
     url='www.neirapinuela.es',
     license='',
