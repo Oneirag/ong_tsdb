@@ -57,9 +57,17 @@ The columns inside the chuk file are:
 
 ## How to use it
 ### Create configuration files
-This package uses ong_utils for configuration, that will be search in 
-`~/.config/ongpi/ong_tsdb.yml`
-The minimal configuration would be:
+This package uses ong_utils for configuration, that by default will be searched in 
+`~/.config/ongpi/ong_tsdb.yml`.
+In case you need the file to be placed in other directory (e.g. if using google colab and want the file to persist), 
+create an environment variable called `ONG_CONFIG_PATH` that points to the directory where `ong_tsdb.yml` will be 
+located. For example, to use a config file named `/content/gdrive/MyDrive/.config/ongpi/ong_tsdb.yml` in google colab use:
+```shell
+%env ONG_CONFIG_PATH=/content/gdrive/MyDrive/.config/ongpi
+```
+
+
+The minimal configuration of the `ong_tsdb.yml` file would be:
 ```yaml
 ong_tsdb:
     BASE_DIR: ~/Documents/ong_tsdb   # Location to store files
@@ -74,9 +82,52 @@ ong_tsdb:
 
 
 ### Create server and run it
-Run server.py 
+Run server.py with python
 
-`python3 -m ong_tsdb.server`
+```shell
+python3 -m ong_tsdb.server`
+```
+or execute a script (if path is properly configured)
+```shell
+ong_tsdb_server
+```
+Both are equivalent
+
+### Create server and run it (in google colab)
+This section explains how to create a persistent server in google colab that persists data in google drive.
+
+First, mount google drive, install library and set environment variable to point to google drive.
+````python
+# Mount google drive
+from google.colab import drive
+drive.mount('/content/gdrive')
+
+# install ong_tsdb
+!pip install git+https://github.com/Oneirag/ong_tsdb.git
+# set environ variable to make config persistent
+%env ONG_CONFIG_PATH=/content/gdrive/MyDrive/.config/ongpi
+````
+If it is the first execution, edit the config file `/content/gdrive/MyDrive/.config/ongpi/ong_tsdb.yaml` 
+with this recommended configuration:
+```yaml
+log: 
+ong_tsdb: 
+  host: localhost
+  port: 5000
+  BASE_DIR: /content/gdrive/MyDrive/ong_tsdb
+  admin_token: whatever_you_want_here 
+  read_token: whatever_you_want_here
+  write_token: whatever_you_want_here
+  uncompressed_chunks: 10
+```
+
+Then, to start server in background, in a single cell run:
+```python
+%%python3 --bg --out output
+
+from ong_tsdb.server import main
+main()
+```
 
 ### Import client, create db and sensors
 ```python

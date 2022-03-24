@@ -5,7 +5,7 @@ with open('requirements.txt') as f:
 
 setup(
     name='ong_tsdb',
-    version='0.6.2',
+    version='0.6.3',
     packages=['ong_tsdb'],
     url='www.neirapinuela.es',
     license='',
@@ -13,4 +13,9 @@ setup(
     author_email='oneirag@yahoo.es',
     description='Simple Time Series DataBase, based on plain files and fixed interval data',
     install_requires=required,
+    entry_points={
+        'console_scripts': [
+            'ong_tsdb_server = ong_tsdb.server:main',
+        ],
+    }
 )
