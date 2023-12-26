@@ -5,41 +5,17 @@ import base64
 import pandas as pd
 import ujson
 import urllib3
-from ong_tsdb import config, logger, LOCAL_TZ, DTYPE, HELLO_MSG, HTTP_COMPRESS_THRESHOLD
+from ong_tsdb import config, logger, LOCAL_TZ, DTYPE, HTTP_COMPRESS_THRESHOLD
 from ong_tsdb.database import OngTSDB
 from urllib3.exceptions import MaxRetryError, TimeoutError, ConnectionError
 from ong_utils.timers import OngTimer
 from ong_utils.urllib3 import create_pool_manager, get_cookies, cookies2header
 import numpy as np
 
+from ong_tsdb.exceptions import OngTsdbClientBaseException, NotAuthorizedException, ProxyNotAuthorizedException, \
+    ServerDownException, WrongAddressException
+
 timer = OngTimer(False)
-
-
-class OngTsdbClientBaseException(Exception):
-    """Base Exception for the exceptions of this module"""
-
-
-class NotAuthorizedException(OngTsdbClientBaseException):
-    """Exception raised when 401 error is received from server"""
-    pass
-
-
-class ProxyNotAuthorizedException(OngTsdbClientBaseException):
-    """Exception raised when 407 error is received from server. Stores failed response for later use"""
-
-    def __init__(self, msg, response):
-        super().__init__(msg)
-        self.response = response
-
-
-class ServerDownException(OngTsdbClientBaseException):
-    """Exception raised when cannot connect to server"""
-    pass
-
-
-class WrongAddressException(OngTsdbClientBaseException):
-    """Raised when 404 error is received"""
-    pass
 
 
 class OngTsdbClient:
@@ -70,8 +46,8 @@ class OngTsdbClient:
         if self.server_url.endswith("/"):
             self.server_url = self.server_url[:-1]
         self.token = token
-        self.headers = urllib3.make_headers(basic_auth=f'token:{self.token}')
-        self.headers.update({"Content-Type": "application/json"})
+        self.headers = {"Content-Type": "application/json"}
+        self.update_token(self.token)
         self.http = create_pool_manager(total=retry_total, connect=retry_connect, backoff_factor=retry_backoff_factor)
         # Force reload configuration, that also serves as a connection test to make sure server is running
         for attempt in range(2):
@@ -95,7 +71,7 @@ class OngTsdbClient:
                     cookies = get_cookies(pnae.response)
                     headers = dict(**self.headers, **cookies2header(cookies))
                     res = self.http.request("POST", self._make_url(url), headers=headers, body=ujson.dumps(body))
-                    if res.data and res.headers.get("content-type").startswith("application/json")\
+                    if res.data and res.headers.get("content-type").startswith("application/json") \
                             and ujson.loads(res.data).get("http_code") == 200:
                         cookies = get_cookies(res)
                         self.headers.update(cookies2header(cookies))
@@ -109,6 +85,11 @@ class OngTsdbClient:
                     raise pnae
             except (ServerDownException, WrongAddressException):
                 break
+
+    def update_token(self, token):
+        """Allows changing token of an already created client"""
+        self.token = token
+        self.headers.update(urllib3.make_headers(basic_auth=f'token:{self.token}'))
 
     def _request(self, method, url, *args, **kwargs):
         """Execute request adding token to header. Raises Exception if unauthorized.

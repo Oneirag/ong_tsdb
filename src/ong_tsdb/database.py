@@ -24,7 +24,7 @@ from ong_tsdb.fileutils import FileUtils, re_chunk_filename
 
 
 class OngTSDBbBaseException(Exception):
-    """Base class for exceptions of this module"""
+    """Base class for exceptions to this module"""
     pass
 
 

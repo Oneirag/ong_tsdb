@@ -167,9 +167,9 @@ def set_metadata(database, sensor, key):
     if _db.exist_sensor(key, database, sensor):
         new_metadata = ujson.loads(request.data)
         _db.update_metadata(key, database, sensor, new_metadata)
-        return make_js_response(f"{sensor=} in {database=} configuration changed ok", 200)
+        return make_js_response(f"sensor={sensor} in database={database} configuration changed ok", 200)
     else:
-        return make_js_response(f"{sensor=} did not exist in {database=} ", 404)
+        return make_js_response(f"sensor={sensor} did not exist in database={database} ", 404)
 
 
 def write_point_list(key: str, point_list: list) -> None:
@@ -395,7 +395,7 @@ def grafana_get_md5(filename):
     return jsonify(_db.get_mdf5(filename))
 
 
-if __name__ == '__main__':
+def main():
     if sys.gettrace() is None:
         # No debug mode
         host = config('host')
@@ -407,3 +407,7 @@ if __name__ == '__main__':
         host = config('test_host', config('host'))
         port = find_available_port(config('test_port', config('port')), logger=logger)
         app.run(host, port, debug=True)
+
+
+if __name__ == '__main__':
+    main()
