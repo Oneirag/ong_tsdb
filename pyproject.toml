@@ -1,0 +1,29 @@
+[project]
+name='ong_tsdb'
+version='0.5.0'
+description='Simple Time Series DataBase, based on plain files and fixed interval data'
+
+# license = {file = "LICENSE.txt"}
+authors = [
+    { email = "oneirag@yahoo.es", name = "Oscar Neira" }
+]
+readme = "README.md"
+requires-python = ">=3.8"
+
+dynamic = ["dependencies"]
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+[tool.setuptools.packages.find]
+# scanning for namespace packages is true by default in pyproject.toml, so
+# you do NOT need to include the following line.
+namespaces = true
+where = ["src"]
+
+[project.urls]  # Optional
+"Homepage" = "https://www.neirapinuela.es"
+"Source" = "https://github.com/Oneirag/ong_tsdb"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
