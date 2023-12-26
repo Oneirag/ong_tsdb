@@ -406,7 +406,8 @@ def main():
         # Debug mode, using test port and test host if available (otherwise host and port)
         host = config('test_host', config('host'))
         port = find_available_port(config('test_port', config('port')), logger=logger)
-        app.run(host, port, debug=True)
+        # app.run(host=host, port=port, debug=True)
+        app.run(host=host, port=port)
 
 
 if __name__ == '__main__':
