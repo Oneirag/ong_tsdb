@@ -9,7 +9,7 @@ from ong_tsdb import config, logger, LOCAL_TZ, DTYPE, HTTP_COMPRESS_THRESHOLD
 from ong_tsdb.database import OngTSDB
 from urllib3.exceptions import MaxRetryError, TimeoutError, ConnectionError
 from ong_utils import OngTimer, create_pool_manager, get_cookies, cookies2header
-import numpy as nps
+import numpy as np
 
 from ong_tsdb.exceptions import OngTsdbClientBaseException, NotAuthorizedException, ProxyNotAuthorizedException, \
     ServerDownException, WrongAddressException
