@@ -67,7 +67,7 @@ class Chunker(object):
 
     def getpos(self, timestamp):
         if isinstance(timestamp, np.ndarray):
-            to_int = np.vectorize(np.int)
+            to_int = np.vectorize(int)
             return to_int((timestamp - self.chunk_timestamp(timestamp[0])) / self.tick_duration)
         else:
             return int((timestamp - self.chunk_timestamp(timestamp)) / self.tick_duration)

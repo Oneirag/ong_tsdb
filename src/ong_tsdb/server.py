@@ -334,6 +334,7 @@ def grafana_index(db_name, sensor_name, key=None):
 @auth_required
 def grafana_query_chunked(db_name, sensor_name, key=""):
     """Reads data and returns it streamed. Receives a post request with the data that has to read"""
+    logger.debug(f"Received grafana query: {request.json}")
 
     def grafana_query(db_name, sensor_name, key):
         """The query itself, that yields the response and will be used later to create streamed response"""
@@ -405,7 +406,8 @@ def main():
         # Debug mode, using test port and test host if available (otherwise host and port)
         host = config('test_host', config('host'))
         port = find_available_port(config('test_port', config('port')), logger=logger)
-        app.run(host, port, debug=True)
+        # app.run(host=host, port=port, debug=True)
+        app.run(host=host, port=port)
 
 
 if __name__ == '__main__':
