@@ -3,5 +3,4 @@ gevent
 msgpack
 numpy
 pandas
-ong_utils
-
+ong_utils >= 0.5.4
