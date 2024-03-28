@@ -1,16 +1,17 @@
+import base64
 import time
 import zlib
+
 import msgpack
-import base64
+import numpy as np
 import pandas as pd
 import ujson
 import urllib3
+from ong_utils import OngTimer, create_pool_manager, get_cookies, cookies2header
+from urllib3.exceptions import MaxRetryError, TimeoutError, ConnectionError
+
 from ong_tsdb import config, logger, LOCAL_TZ, DTYPE, HTTP_COMPRESS_THRESHOLD
 from ong_tsdb.database import OngTSDB
-from urllib3.exceptions import MaxRetryError, TimeoutError, ConnectionError
-from ong_utils import OngTimer, create_pool_manager, get_cookies, cookies2header
-import numpy as np
-
 from ong_tsdb.exceptions import OngTsdbClientBaseException, NotAuthorizedException, ProxyNotAuthorizedException, \
     ServerDownException, WrongAddressException
 
@@ -61,7 +62,7 @@ class OngTsdbClient:
                 It will only be sent if server responds with application/json
                 Response body will be compose of form field received from server (if any) updated with
                 the proxy_auth_body dictionary"""
-                if pnae.response.getheader("content-type").startswith("application/json"):
+                if pnae.response.headers.get("content-type").startswith("application/json"):
                     js_resp = ujson.loads(pnae.response.data)
                     url = js_resp.get("url")
                     body = js_resp.get("form", dict())
