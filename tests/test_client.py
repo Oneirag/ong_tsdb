@@ -52,7 +52,7 @@ class TestOngTsdbClient(TestCase):
             print(f"Sensor {sensor_name} created {sensor_created_ok}")
         print("Test database created")
 
-    def write_ts(self, n_periods, data_freq, sensor_name):
+    def write_ts(self, n_periods, data_freq, sensor_name, fill_value=0):
 
         now = pd.Timestamp.now(tz=LOCAL_TZ).replace(microsecond=0)
         if data_freq.endswith("h"):
@@ -77,7 +77,7 @@ class TestOngTsdbClient(TestCase):
             i = idx % len(sequence)
             value_to_write.append(sequence[i].format(DB_TEST=DB_TEST, sensor_name=sensor_name, ts=ts))
 
-        success = self.write_client.write(value_to_write)
+        success = self.write_client.write(value_to_write, fill_value=fill_value)
         self.assertTrue(success, f"Error writing: {value_to_write}")
         print(f"Written OK: {value_to_write[:1000]}")
         self._db.config_reload()
@@ -135,6 +135,11 @@ class TestOngTsdbClient(TestCase):
     def test_write_data1s_sensor1s(self):
         """Test writing in database each 1 second"""
         self.write_ts(n_periods=10, data_freq="-1s", sensor_name=get_sensor_name("1s"))
+
+    def test_write_data1s_sensor1s_fill_value(self):
+        """Test writing in database each 1 second"""
+        self.write_ts(n_periods=10, data_freq="-1s", sensor_name=get_sensor_name("1s"),
+                      fill_value="nan")
 
     def test_write_data1d_sensor1s(self):
         """Tests writing in database each 1 day"""

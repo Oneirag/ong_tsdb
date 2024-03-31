@@ -246,13 +246,13 @@ class OngTsdbClient:
         timer.tic("total post execution")
         if sequence:
             if isinstance(sequence[0], str):
-                return self._post(self._make_url(f"/influx({fill_value}"), body="\n".join(sequence).encode())
+                return self._post(self._make_url(f"/influx{fill_value}"), body="\n".join(sequence).encode())
             elif isinstance(sequence[0], (list, tuple)):
                 timer.tic("Using msgpack")
                 body = msgpack.dumps(sequence)
                 timer.toc("Using msgpack")
 
-                retval = self._post(self._make_url(f"/influx_binary/{fill_value}"), body=body, gzip=False)
+                retval = self._post(self._make_url(f"/influx_binary{fill_value}"), body=body, gzip=False)
                 timer.toc("total post execution")
                 return retval
             else:
