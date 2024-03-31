@@ -10,8 +10,8 @@ import os
 import random
 import shutil
 import string
-import time
 import threading
+import time
 
 import numpy as np
 import pandas as pd
@@ -271,9 +271,9 @@ class OngTSDB(object):
         # Delete old chunk and keep just new one
         os.remove(self.get_FU_path(db, sensor, original_chunk_name))
 
-    def add_new_metrics(self, key, db, sensor, new_metrics: list):
+    def add_new_metrics(self, key, db, sensor, new_metrics: list, fill_value=0):
         """Adds new metric(s) to a sensor. To so, opens all chunks from the changing chunk ahead,
-        adds empty column to all of then, changes the column name an deletes the old ones"""
+        adds empty column to all of them, changes the column name an deletes the old ones"""
 
         # Open all chunks after timestamp
         chunker = self.get_chunker(key, db, sensor)
@@ -292,7 +292,8 @@ class OngTSDB(object):
         for old_chunk_name in chunks_to_change:
             a = self.FU.fast_read_np(self.get_FU_path(db, sensor, old_chunk_name), dtype=DTYPE)
             new_array = np.concatenate((a[:, :-1],
-                                        np.zeros((a.shape[0], len(new_metrics)), dtype=a.dtype),
+                                        np.full(shape=(a.shape[0], len(new_metrics)), dtype=a.dtype,
+                                                fill_value=fill_value),
                                         a[:, -1][:, None]),
                                        axis=1)
             parts = re_chunk_filename.match(old_chunk_name).groupdict()

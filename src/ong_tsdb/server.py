@@ -172,11 +172,13 @@ def set_metadata(database, sensor, key):
         return make_js_response(f"sensor={sensor} did not exist in database={database} ", 404)
 
 
-def write_point_list(key: str, point_list: list) -> None:
+def write_point_list(key: str, point_list: list, fill_value: float = 0) -> None:
     """
     Writes data from point_list into database
     :param key: token for writing
     :param point_list: list of db, sensor, metrics (list of metric,sensor) and timestamp
+    :param fill_value: when a new metrics is created, this is the value for the non existing data.
+    Defaults to 0
     :return:
     """
     db_meter_data_dict = dict()
@@ -198,7 +200,8 @@ def write_point_list(key: str, point_list: list) -> None:
 
         def append_data(self, timestamp, data_metrics, data_values):
             """For a ts, data_metrics is a list of strings with the metrics and data_values
-            is the list of numerical values corresponding to data_metrics"""
+            is the list of numerical values corresponding to data_metrics
+            """
             timestamp = timestamp / 1e9
             init_date = int(self.chunker.chunk_timestamp(timestamp))
             if init_date not in self.timestamps:
@@ -220,7 +223,8 @@ def write_point_list(key: str, point_list: list) -> None:
     # For each group, send a numpy array to write_ticks_numpy so they are written all together
     for db_meter_data in db_meter_data_dict.values():
         if db_meter_data.new_metrics:
-            _db.add_new_metrics(key, db_meter_data.db, db_meter_data.sensor, db_meter_data.new_metrics)
+            _db.add_new_metrics(key, db_meter_data.db, db_meter_data.sensor, db_meter_data.new_metrics,
+                                fill_value=fill_value)
         metrics_db = _db.get_metrics(key, db_meter_data.db, db_meter_data.sensor)
         for (chunk_name, data_metrics), data_values, metrics_ts in zip(db_meter_data.data_metrics.items(),
                                                                        db_meter_data.data_values.values(),
@@ -231,32 +235,44 @@ def write_point_list(key: str, point_list: list) -> None:
             np_ts = np.array(metrics_ts)
             _db.write_tick_numpy(key, db_meter_data.db, db_meter_data.sensor, np_values, np_ts)
 
-@app.route('/influx', methods=["POST"])
+
+def parse_fill_value(fill_value) -> float:
+    try:
+        fill_value = float(fill_value)
+    except:
+        fill_value = 0
+    return fill_value
+
+
+@app.route('/influx', methods=["POST"], defaults={'fill_value': 0})
+@app.route('/influx/<fill_value>', methods=["POST"])
 @auth_required
-def write_point(key):
+def write_point(key, fill_value):
     data = request.data
     if request.headers.get('Content-Encoding', "") == "gzip":
         data = zlib.decompress(data)
     try:
         # First parse input data
         line_points = [split_influx(line.decode()) for line in data.splitlines()]
-        write_point_list(key, line_points)
+        write_point_list(key, line_points, fill_value=parse_fill_value(fill_value))
     except Exception as e:
         # TODO: Inform about num_line and line in the error description
         raise e
     return make_js_response(f"{len(line_points)} lines inserted ok")
 
 
-@app.route('/influx_binary', methods=["POST"])
+@app.route('/influx_binary', methods=["POST"], defaults={'fill_value': 0})
+@app.route('/influx_binary/<fill_value>', methods=["POST"])
 @auth_required
-def write_point_bin(key):
+def write_point_bin(key, fill_value):
+    """Fill value is the value to fill chunks when no old value is found"""
     data = request.data
     if request.headers.get('Content-Encoding', "") == "gzip":
         data = zlib.decompress(data)
     data = msgpack.loads(data)
     try:
         # First parse input data
-        write_point_list(key, data)
+        write_point_list(key, data, fill_value=parse_fill_value(fill_value))
     except Exception as e:
         # TODO: Inform about num_line and line in the error description
         raise e
@@ -297,7 +313,8 @@ def read_df(db_name, sensor_name, key=None):
             metadata = _db.get_metadata(key, db_name, sensor_name)
         # return encoded_numpy and the list of metrics
         # if more than 1024 data, compress JUST DATA to send it faster if client headers asked for it
-        compressed = len(bytes_dates) > HTTP_COMPRESS_THRESHOLD and request.headers.get("content-encoding", "") == "gzip"
+        compressed = len(bytes_dates) > HTTP_COMPRESS_THRESHOLD and request.headers.get("content-encoding",
+                                                                                        "") == "gzip"
         with time_it.context_manager("Compressing"):
             if compressed:
                 encoded_numpy = zlib.compress(encoded_numpy)
@@ -383,7 +400,7 @@ def grafana_query_chunked(db_name, sensor_name, key=""):
 
 
 @app.route("/<db_name>/<sensor_name>/metrics", methods=["POST"])
-@app.route("/<db_name>/<sensor_name>/search", methods=["POST"])     # for Grafana
+@app.route("/<db_name>/<sensor_name>/search", methods=["POST"])  # for Grafana
 @auth_required
 def grafana_search(db_name, sensor_name, key=""):
     """Returns a JSON with the metrics of the db and sensor"""
