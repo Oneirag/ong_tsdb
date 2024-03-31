@@ -1,8 +1,6 @@
 import os
 
 import numpy as np
-
-from ong_utils import LOCAL_TZ
 from ong_utils.config import OngConfig
 
 __cfg = OngConfig("ong_tsdb")
@@ -14,5 +12,5 @@ COMPRESSION_EXT = ".gz"
 DTYPE = np.float64
 DTYPE = np.float32  # Now trying storing not the full TS but the offset with the TS start...
 CHUNK_ROWS = 2 ** 14
-HELLO_MSG = "Hello from Ong_Tsdb server"
-HTTP_COMPRESS_THRESHOLD = 1024      # Minimun number of data to activate compression in client and server
+HELLO_MSG = "Hello from Ong_Tsdb server\nVersion 0.6.0"
+HTTP_COMPRESS_THRESHOLD = 1024  # Minimum number of data to activate compression in client and server
