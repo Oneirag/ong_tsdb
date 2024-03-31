@@ -260,7 +260,7 @@ class OngTsdbClient:
         else:
             return False
 
-    def write_df(self, db: str, sensor: str, df) -> bool:
+    def write_df(self, db: str, sensor: str, df, fill_value=0) -> bool:
         """Writes a pandas dataframe into a certain database and sensor.
         Pandas data frame must be indexed by dates and have metrics/measurements as columns"""
         # Check index
@@ -270,7 +270,7 @@ class OngTsdbClient:
         for idx, row in df.iterrows():
             sequence.append((db, sensor, list(row.index), list(row.values), idx.value))
 
-        return self.write(sequence)
+        return self.write(sequence, fill_value=fill_value)
 
     def config_reload(self):
         """Forces a config reload of server (e.g. for manually modifying sensors)"""
