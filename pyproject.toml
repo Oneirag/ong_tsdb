@@ -1,6 +1,6 @@
 [project]
 name='ong_tsdb'
-version='0.5.2'
+version = '0.6.0'   # Remember: change the HELLO_MSG variable in __init__.py accordingly
 description='Simple Time Series DataBase, based on plain files and fixed interval data'
 
 # license = {file = "LICENSE.txt"}
@@ -8,7 +8,7 @@ authors = [
     { email = "oneirag@yahoo.es", name = "Oscar Neira" }
 ]
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.11"
 
 dynamic = ["dependencies"]
 [tool.setuptools.dynamic]

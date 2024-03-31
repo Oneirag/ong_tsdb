@@ -194,8 +194,13 @@ client.update_token(config("read_token"))   # Now client is a read client, reusi
 Create a client for writing and send data, as a str (for a single measurement), a list of
 str or a list of tuples. 
 When ingesting a lot of data at once, using list of tuples is obviously faster
+
+If you append data that it is new, a new measurement is created. Not filled values are filled
+by default with 0, but it can be filled with any other value with the `fill_value` parameter
+of `write` or `write_df` methods.
 ```python
 import pandas as pd
+import numpy as np
 from ong_tsdb import config
 from ong_tsdb.client import OngTsdbClient
 
@@ -207,6 +212,11 @@ sequence_str = f"my_db,sensor=my_sensor measurement1=123,measurement2=34.4 {ts}"
 sequence_list = [("my_db", "my_sensor", ["measurement1", "measurement2"], [123, 34.4], ts)]
 write_client.write(sequence_str)
 write_client.write(sequence_list)       # Same but with a list
+# Write new data
+new_sequence_list = [("my_db", "my_sensor", ["new_measurement"], [123], ts + 1)]
+# In this case, past values will be filled with nan instead of 0s
+write_client.write(new_sequence_list, fill_value=np.nan)
+
 import pandas as pd
 df = pd.DataFrame([[123, 34.4]], index=[pd.Timestamp.utcfromtimestamp(ts/1e9)], 
                   columns=["measurement1", "measurement2"])

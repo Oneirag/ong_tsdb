@@ -230,21 +230,29 @@ class OngTsdbClient:
         except:
             return False
 
-    def write(self, sequence: list) -> bool:
+    def write(self, sequence: list, fill_value=0) -> bool:
         """Writes data to database, using influx format, e.g. a list of strings with the following format:
         "{dabatase},{ignored_key}={sensor} {metrics} {ts}"
         Also sequence can be a list of tuples of database, sensor, metrics, ts
         ts is the timestamp in nanoseconds
+        Fill_value is the default value when adding a new metric
         """
+        if fill_value == 0:
+            # 0 is the default value, there is no need for sending it
+            fill_value = ""
+        else:
+            fill_value = f"/{fill_value}"
+
         timer.tic("total post execution")
         if sequence:
             if isinstance(sequence[0], str):
-                return self._post(self._make_url("/influx"), body="\n".join(sequence).encode())
+                return self._post(self._make_url(f"/influx{fill_value}"), body="\n".join(sequence).encode())
             elif isinstance(sequence[0], (list, tuple)):
                 timer.tic("Using msgpack")
                 body = msgpack.dumps(sequence)
                 timer.toc("Using msgpack")
-                retval = self._post(self._make_url("/influx_binary"), body=body, gzip=False)
+
+                retval = self._post(self._make_url(f"/influx_binary{fill_value}"), body=body, gzip=False)
                 timer.toc("total post execution")
                 return retval
             else:
@@ -252,7 +260,7 @@ class OngTsdbClient:
         else:
             return False
 
-    def write_df(self, db: str, sensor: str, df) -> bool:
+    def write_df(self, db: str, sensor: str, df, fill_value=0) -> bool:
         """Writes a pandas dataframe into a certain database and sensor.
         Pandas data frame must be indexed by dates and have metrics/measurements as columns"""
         # Check index
@@ -262,7 +270,7 @@ class OngTsdbClient:
         for idx, row in df.iterrows():
             sequence.append((db, sensor, list(row.index), list(row.values), idx.value))
 
-        return self.write(sequence)
+        return self.write(sequence, fill_value=fill_value)
 
     def config_reload(self):
         """Forces a config reload of server (e.g. for manually modifying sensors)"""
