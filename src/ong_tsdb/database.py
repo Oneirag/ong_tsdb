@@ -78,7 +78,7 @@ class OngTSDB(object):
             logger.info("You can check admin key in {}".format(FU.path_config()))
 
         with open(self.FU.path_config(), "r") as f:
-            self.admin_key = f.readline()
+            self.admin_key = f.readline().strip()
         self.db = dict()
         self.config_reload()
 

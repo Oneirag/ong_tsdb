@@ -3,10 +3,11 @@ Class to manage chunk files
 A chunk is a file
 """
 import time
+import re
 
 import numpy as np
 
-from ong_tsdb import COMPRESSION_EXT, DTYPE, config, CHUNK_ROWS
+from ong_tsdb import COMPRESSION_EXT, DTYPE, config, CHUNK_ROWS, logger
 from ong_tsdb.fileutils import generate_filename_from_parts
 
 
@@ -28,16 +29,21 @@ class Chunker(object):
         self.n_rows_per_chunk = CHUNK_ROWS
         self.itemsizebytes = np.dtype(DTYPE).itemsize
         if isinstance(freq, str):
-            period_type = freq[-1].lower()
-            period_length = float(freq[:-1])
-            if period_type == "s":
+            period_length, period_type = re.match(r'^(\d+)(.*)', freq).groups()
+            period_length = float(period_length)
+            period_type = period_type.strip()
+            if period_type in ("H", "T", "S", "L", "U", "N"):
+                logger.warning(
+                    f"Deprecated alias '{period_type}'. Aliases H, BH, CBH, T, S, L, U, and N are deprecated "
+                    f"in favour of the aliases h, bh, cbh, min, s, ms, us, and ns.")
+            if period_type in ("S", "s"):
                 multiplier = 1
-            elif period_type == "m":
+            elif period_type in ("M", "MIN", "T", "min"):
                 multiplier = 60
-            elif period_type == "h":
+            elif period_type in ("H", "h"):
                 multiplier = 60 * 60
-            elif period_type == "d":
-                multiplier = 60 * 60 * 24       # TODO: won't work properly in case of day light saving time changes
+            elif period_type in ("D", "C", "B"):  # Days: calendar, custom and business
+                multiplier = 60 * 60 * 24  # Internally work with UTC, so this should work ok
             else:
                 raise Exception("Frequency: " + freq + " not implemented")
             self.tick_duration = period_length * multiplier
