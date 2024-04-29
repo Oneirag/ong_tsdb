@@ -19,7 +19,7 @@ from flask import Flask, jsonify, request, stream_with_context
 from gevent.pywsgi import WSGIServer
 from werkzeug.exceptions import HTTPException, Unauthorized
 
-from ong_tsdb import config, DTYPE, HELLO_MSG, HTTP_COMPRESS_THRESHOLD, logger
+from ong_tsdb import config, DTYPE, HELLO_MSG, HTTP_COMPRESS_THRESHOLD, logger, __version__
 from ong_tsdb.database import OngTSDB, NotAuthorizedException
 from ong_tsdb.server_utils import split_influx
 from ong_utils import OngTimer, is_debugging, find_available_port
@@ -58,7 +58,7 @@ def handle_exception(e):
 
 def make_js_response(msg, http_code=200, **kwargs):
     """Returns a js with msg as field and the http code"""
-    return jsonify(msg=msg, http_code=http_code, ok=http_code == 200, **kwargs), http_code
+    return jsonify(msg=msg, http_code=http_code, ok=http_code == 200, version=__version__, **kwargs), http_code
 
 
 def auth_required(f):
@@ -283,7 +283,7 @@ def write_point_bin(key, fill_value):
 @auth_required
 def get_lasttimestamp(db_name, sensor_name, key):
     """Returns a json with the last timestamp in the key 'last_timestamp'"""
-    return jsonify(dict(last_timestamp=_db.get_last_timestamp(key, db_name, sensor_name)))
+    return make_js_response(msg=None, last_timestamp=_db.get_last_timestamp(key, db_name, sensor_name))
 
 
 @app.route("/<db_name>/<sensor_name>/read_df", methods=["post"])
@@ -324,6 +324,7 @@ def read_df(db_name, sensor_name, key=None):
             "metrics": metrics,
             "metadata": metadata,
             "compressed": compressed,
+            "version": __version__
         }
         return retval
     else:
@@ -334,7 +335,8 @@ def read_df(db_name, sensor_name, key=None):
 @auth_required
 def get_metadata(db_name, sensor_name, key=""):
     """Returns a JSON with the metadata of the db and sensor"""
-    return jsonify(_db.get_metadata(key, db_name, sensor_name))
+    metadata = _db.get_metadata(key, db_name, sensor_name)
+    return make_js_response(msg=None, metadata=metadata)
 
 
 #########################################

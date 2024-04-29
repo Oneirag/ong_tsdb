@@ -23,3 +23,8 @@ class ServerDownException(OngTsdbClientBaseException):
 class WrongAddressException(OngTsdbClientBaseException):
     """Raised when 404 error is received"""
     pass
+
+
+class WrongServerVersion(OngTsdbClientBaseException):
+    """Raised when server and client version do not match"""
+    pass
