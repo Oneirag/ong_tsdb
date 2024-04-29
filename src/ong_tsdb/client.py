@@ -11,6 +11,7 @@ from ong_utils import OngTimer, create_pool_manager, get_cookies, cookies2header
 from urllib3.exceptions import MaxRetryError, TimeoutError, ConnectionError
 
 from ong_tsdb import config, logger, LOCAL_TZ, DTYPE, HTTP_COMPRESS_THRESHOLD
+from ong_tsdb.check_versions import check_version_and_raise
 from ong_tsdb.database import OngTSDB
 from ong_tsdb.exceptions import OngTsdbClientBaseException, NotAuthorizedException, ProxyNotAuthorizedException, \
     ServerDownException, WrongAddressException
@@ -21,7 +22,7 @@ timer = OngTimer(False)
 class OngTsdbClient:
 
     def __init__(self, url: str, token: str, retry_total=20, retry_connect=None, retry_backoff_factor=.2,
-                 proxy_auth_body: dict = None, **kwargs):
+                 proxy_auth_body: dict = None, validate_server_version: bool = True, **kwargs):
         """
         Initializes client. It needs just an url (that includes port, parameter port is kept for backward compatibility
          but it is not used anymore) and a token.
@@ -34,7 +35,10 @@ class OngTsdbClient:
         :param retry_backoff_factor: param backoff_factor for urllib3.Retry. Defaults to 0.2
         :param proxy_auth_body: and optional dict with the body to be sent to the auth proxy (if ongtsdb is behind a
         server with authentication, this is the body to be posted to the login page)
+        :param validate_server_version: True (default) to validate that the version of the server is greater or equal
+         than the same as the client to raise a WrongVersionException, False otherwise
         """
+        self.validate_server_version = validate_server_version
         if proxy_auth_body is None:
             proxy_auth_body = dict()
         self.proxy_auth_body = proxy_auth_body
@@ -153,7 +157,11 @@ class OngTsdbClient:
         timer.toc("Executing post")
         if req:
             if req.status in (200, 201):
-                return True, ujson.loads(req.data)
+                retval = ujson.loads(req.data)
+                if self.validate_server_version:
+                    server_version = retval.get("version")
+                    check_version_and_raise(server_version)
+                return True, retval
             else:
                 logger.info(f"{req.status} {req.data.decode()}")
                 return False, None
@@ -309,7 +317,10 @@ class OngTsdbClient:
     def get_metadata(self, db, sensor):
         """Returns metadata of a sensor"""
         success, json = self._post_retval(self._make_url(f"/{db}/{sensor}/metadata"))
-        return json if success else None
+        if not json:
+            return None
+        metadata = json.get("metadata", json)  # For retro compatibility
+        return metadata if success else None
 
     def read_grafana(self, db, sensor, date_from, date_to=None, metrics=None) -> pd.DataFrame:
         """

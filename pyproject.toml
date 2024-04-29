@@ -1,6 +1,5 @@
 [project]
 name='ong_tsdb'
-version = '0.6.2'   # Remember: change the HELLO_MSG variable in __init__.py accordingly
 description='Simple Time Series DataBase, based on plain files and fixed interval data'
 
 # license = {file = "LICENSE.txt"}
@@ -10,9 +9,12 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.11"
 
-dynamic = ["dependencies"]
+dynamic = ["dependencies", "version"]
+
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
+version = { attr = "ong_tsdb.__version__" }
+
 
 [tool.setuptools.packages.find]
 # scanning for namespace packages is true by default in pyproject.toml, so
