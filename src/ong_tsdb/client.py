@@ -158,9 +158,10 @@ class OngTsdbClient:
         if req:
             if req.status in (200, 201):
                 retval = ujson.loads(req.data)
-                if self.validate_server_version:
-                    server_version = retval.get("version")
-                    check_version_and_raise(server_version)
+                if isinstance(retval, dict):
+                    if self.validate_server_version:
+                        server_version = retval.get("version")
+                        check_version_and_raise(server_version)
                 return True, retval
             else:
                 logger.info(f"{req.status} {req.data.decode()}")
