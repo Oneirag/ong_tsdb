@@ -38,11 +38,11 @@ class Chunker(object):
                     f"in favour of the aliases h, bh, cbh, min, s, ms, us, and ns.")
             if period_type in ("S", "s"):
                 multiplier = 1
-            elif period_type in ("M", "MIN", "T", "min"):
+            elif period_type in ("M", "MIN", "T", "min", "m"):
                 multiplier = 60
             elif period_type in ("H", "h"):
                 multiplier = 60 * 60
-            elif period_type in ("D", "C", "B"):  # Days: calendar, custom and business
+            elif period_type.upper() in ("D", "C", "B"):  # Days: calendar, custom and business
                 multiplier = 60 * 60 * 24  # Internally work with UTC, so this should work ok
             else:
                 raise Exception("Frequency: " + freq + " not implemented")
