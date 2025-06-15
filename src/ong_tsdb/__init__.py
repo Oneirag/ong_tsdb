@@ -3,7 +3,7 @@ import os
 import numpy as np
 from ong_utils import OngConfig, LOCAL_TZ
 
-__version__ = "0.6.4"  # Version of the software
+__version__ = "0.7.0"  # Version of the software
 
 __cfg = OngConfig("ong_tsdb")
 config = __cfg.config
