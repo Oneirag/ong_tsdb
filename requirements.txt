@@ -1,6 +1,6 @@
-flask
-gevent
-msgpack
-numpy >= 2.3.0
-pandas
-ong_utils >= 0.5.4
+flask ~= 3.1.1
+gevent ~= 25.5.1
+msgpack ~= 1.1.1
+numpy ~= 2.3.0
+pandas ~= 2.2.3
+ong_utils >= 1.0.6
