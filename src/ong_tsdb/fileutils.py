@@ -272,7 +272,11 @@ class FileUtils(object):
             n_cols = _get_chunkcolumns(filename)
             shape = int(arr.shape[0] / n_cols), n_cols
 
-        arr.shape = shape
+        if arr.shape[0] == 0:
+            # If the file is empty, return an empty array with the correct shape
+            arr = np.full(shape, None, dtype=dtype)
+        else:    
+            arr.shape = shape
         return arr
 
 

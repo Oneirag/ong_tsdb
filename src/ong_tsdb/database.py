@@ -342,6 +342,7 @@ class OngTSDB(object):
                 # Reopen for writing
                 f = self.FU.get_open_func(chunk_name)(chunk_name, 'wb')
 
+            value_write = np.array(value_write)  # Make sure it is contiguous
             idx_not_nan = np.nonzero(~np.isnan(np_values))  # Write only not nan values
             value_write[pos[idx_not_nan[0]], idx_not_nan[1] + 1] = np_values[idx_not_nan]
             vw = value_write[pos, 1:-1]
