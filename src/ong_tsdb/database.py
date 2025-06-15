@@ -336,7 +336,7 @@ class OngTSDB(object):
             else:
                 # Open for read only
                 f = self.FU.get_open_func(chunk_name)(chunk_name, 'rb')
-                value_write = np.fromstring(f.read(), dtype=np_values.dtype)
+                value_write = np.frombuffer(f.read(), dtype=np_values.dtype)
                 value_write.shape = (chunker.n_rows_per_chunk, cols_chunk_array)
                 f.close()
                 # Reopen for writing
