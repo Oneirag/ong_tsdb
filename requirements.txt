@@ -1,6 +1,6 @@
 flask
 gevent
 msgpack
-numpy
+numpy >= 2.3.0
 pandas
 ong_utils >= 0.5.4
