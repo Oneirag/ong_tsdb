@@ -480,7 +480,7 @@ class OngTSDB(object):
             for compressed in (False, True):
                 chunk_name = chunker.chunk_name(chunk, SHAPE[1], compressed=compressed)
                 file_name = self.get_FU_path(db, sensor, chunk_name)
-                if os.path.exists(file_name):
+                if os.path.exists(file_name) and os.path.getsize(file_name) > 0:
                     return file_name
             return file_name
 
