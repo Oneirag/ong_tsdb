@@ -8,7 +8,9 @@ __version__ = "0.6.4"  # Version of the software
 __cfg = OngConfig("ong_tsdb")
 config = __cfg.config
 logger = __cfg.logger
-BASE_DIR = os.path.expanduser(config("BASE_DIR"))
+if not config("BASE_DIR", None):
+    print("BASE_DIR config variable is not set. Using ~/ong_tsdb as default")
+BASE_DIR = os.path.expanduser(config("BASE_DIR", "~/ong_tsdb"))
 COMPRESSION_EXT = ".gz"
 # DTYPE = np.float32  # Dates would end if 2038 if used float32
 DTYPE = np.float64
