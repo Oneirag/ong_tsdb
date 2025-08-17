@@ -2,8 +2,10 @@ import logging
 import sys
 
 import ujson
+from ong_utils import is_debugging
 
-if sys.gettrace() is None:
+
+if not is_debugging():
     from gevent import monkey
 
     monkey.patch_all()
@@ -48,6 +50,7 @@ def handle_exception(e):
     if isinstance(e, HTTPException):
         return e
 
+    print(e.with_traceback(sys.exc_info()[2]))  # type: ignore
     # now you're handling non-HTTP exceptions only
     return make_js_response("Generic Exception found", 500,
                             code=500,
@@ -415,7 +418,7 @@ def grafana_get_md5(filename):
 
 
 def main():
-    if sys.gettrace() is None:
+    if not is_debugging():
         # No debug mode
         host = config('host')
         port = find_available_port(config('port'), logger=logger)

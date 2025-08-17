@@ -7,6 +7,7 @@ Created on Wed Jan  4 00:48:46 2017
 """
 import time
 import os
+from pathlib import Path
 import re
 import grp
 import gzip
@@ -18,7 +19,7 @@ from pprint import pprint
 
 
 # Regular expression for parsing chunk filenames
-re_chunk_filename = re.compile(f"(?P<timestamp>\d+).(?P<n_columns>\d+)(?P<compression>{COMPRESSION_EXT})?")
+re_chunk_filename = re.compile(rf"(?P<timestamp>\d+).(?P<n_columns>\d+)(?P<compression>{COMPRESSION_EXT})?")
 
 
 def extract_filename_parts(filename):
@@ -41,10 +42,12 @@ def _get_subdirs(path):
 
 
 def _get_chunkfiles(path):
-    """Returns a sorted list of chunk (either compressed or uncompressed files)"""
-    files = [n for n in os.listdir(path) if os.path.isfile(os.path.join(path, n))
-             and re_chunk_filename.match(n)
-             ]
+    """Returns a sorted list of chunk (either compressed or uncompressed files), excluding empty files"""
+    p = Path(path)
+    files = [
+        f.name for f in p.iterdir()
+        if f.is_file() and re_chunk_filename.match(f.name) and f.stat().st_size > 0
+    ]
     files.sort()
     return files
 
@@ -272,7 +275,11 @@ class FileUtils(object):
             n_cols = _get_chunkcolumns(filename)
             shape = int(arr.shape[0] / n_cols), n_cols
 
-        arr.shape = shape
+        if arr.shape[0] == 0:
+            # If the file is empty, return an empty array with the correct shape
+            arr = np.full(shape, None, dtype=dtype)
+        else:    
+            arr.shape = shape
         return arr
 
 

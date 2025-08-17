@@ -342,6 +342,7 @@ class OngTSDB(object):
                 # Reopen for writing
                 f = self.FU.get_open_func(chunk_name)(chunk_name, 'wb')
 
+            value_write = np.array(value_write)  # Make sure it is contiguous
             idx_not_nan = np.nonzero(~np.isnan(np_values))  # Write only not nan values
             value_write[pos[idx_not_nan[0]], idx_not_nan[1] + 1] = np_values[idx_not_nan]
             vw = value_write[pos, 1:-1]
@@ -479,7 +480,7 @@ class OngTSDB(object):
             for compressed in (False, True):
                 chunk_name = chunker.chunk_name(chunk, SHAPE[1], compressed=compressed)
                 file_name = self.get_FU_path(db, sensor, chunk_name)
-                if os.path.exists(file_name):
+                if os.path.exists(file_name) and os.path.getsize(file_name) > 0:
                     return file_name
             return file_name
 
