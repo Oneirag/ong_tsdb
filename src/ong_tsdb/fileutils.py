@@ -9,9 +9,11 @@ import time
 import os
 from pathlib import Path
 import re
-import grp
+from ong_utils import is_windows
+if not is_windows:
+    import grp
+    from pwd import getpwnam
 import gzip
-from pwd import getpwnam
 import stat
 import numpy as np
 from ong_tsdb import config, BASE_DIR, COMPRESSION_EXT, logger, DTYPE, CHUNK_ROWS
