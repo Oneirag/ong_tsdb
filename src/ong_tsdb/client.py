@@ -12,7 +12,6 @@ from urllib3.exceptions import MaxRetryError, TimeoutError, ConnectionError
 
 from ong_tsdb import config, logger, LOCAL_TZ, DTYPE, HTTP_COMPRESS_THRESHOLD
 from ong_tsdb.check_versions import check_version_and_raise
-from ong_tsdb.database import OngTSDB
 from ong_tsdb.exceptions import OngTsdbClientBaseException, NotAuthorizedException, ProxyNotAuthorizedException, \
     ServerDownException, WrongAddressException
 
@@ -367,6 +366,8 @@ class OngTsdbClient:
         :param metrics: list of metrics to read (all metrics if not given)
         :return: a pandas dataframe
         """
+        # This local import avoid problems when just needing remote client in windows
+        from ong_tsdb.database import OngTSDB
         _db = OngTSDB()
         end_ts = date_to.timestamp() if date_to else None
         data = _db.read(self.token, db, sensor, start_ts=date_from.timestamp(), end_ts=end_ts)
