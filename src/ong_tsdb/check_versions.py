@@ -3,6 +3,9 @@ from ong_tsdb.exceptions import WrongServerVersion
 
 
 def _parse_version(version: str) -> tuple:
+    # Drop PEP 440 local version label ("+foo") and pre/post/dev/release
+    # separators ("-rc1", "-dev1") so they do not affect the comparison.
+    version = version.split("+", 1)[0].split("-", 1)[0]
     return tuple(int(p) for p in version.split(".") if p.isdigit())
 
 

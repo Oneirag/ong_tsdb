@@ -3,6 +3,7 @@
 """
 Class to manage file storage (under BASE_DIR directory)
 """
+
 import enum
 import hashlib
 import inspect
@@ -20,28 +21,14 @@ from six.moves._thread import start_new_thread
 
 from ong_tsdb import logger, LOCAL_TZ, BASE_DIR, DTYPE
 from ong_tsdb.chunker import Chunker
+from ong_tsdb.exceptions import (  # noqa: F401  -- re-exports for back-compat
+    OngTSDBbBaseException,
+    NotAuthorizedException,
+    ElementAlreadyExistsException,
+    ElementNotFoundException,
+    InvalidDataWriteException,
+)
 from ong_tsdb.fileutils import FileUtils, re_chunk_filename
-
-
-class OngTSDBbBaseException(Exception):
-    """Base class for exceptions to this module"""
-    pass
-
-
-class NotAuthorizedException(OngTSDBbBaseException):
-    pass
-
-
-class ElementAlreadyExistsException(OngTSDBbBaseException):
-    pass
-
-
-class ElementNotFoundException(OngTSDBbBaseException):
-    pass
-
-
-class InvalidDataWriteException(OngTSDBbBaseException):
-    pass
 
 
 class Actions(enum.Enum):
@@ -67,7 +54,7 @@ class OngTSDB(object):
             os.makedirs(BASE_DIR)
             FU = FileUtils()
             length = 20
-            admin_key = ''.join(random.sample(string.hexdigits, int(length)))
+            admin_key = "".join(random.sample(string.hexdigits, int(length)))
             with FU.safe_createfile(FU.path_config(), "w") as f:
                 f.write(admin_key)
             logger.info("DB correctly setup")
@@ -108,7 +95,9 @@ class OngTSDB(object):
             if json_string is not None:
                 with open(file_path, "r") as f:
                     if f.read() != json_string:
-                        raise ElementAlreadyExistsException("Element already exists with different config")
+                        raise ElementAlreadyExistsException(
+                            "Element already exists with different config"
+                        )
 
     def __is_key(self, db, sensor, key_name, key_value) -> bool:
         """Checks if key_value correspond to a key_name from a sensor and database"""
@@ -130,9 +119,12 @@ class OngTSDB(object):
             is_readkey = self.__is_key(db, sensor, self.__READ_KEY, key)
             if is_readkey and action in (Actions.READ,):
                 return
-        time.sleep(random.random() * .01)  # This random prevents performing time attacks
-        raise NotAuthorizedException("Invalid key for function " +
-                                     inspect.stack()[1][3])
+        time.sleep(
+            random.random() * 0.01
+        )  # This random prevents performing time attacks
+        raise NotAuthorizedException(
+            "Invalid key for function " + inspect.stack()[1][3]
+        )
 
     def exist_db(self, key, db):
         """True id db exists"""
@@ -145,10 +137,15 @@ class OngTSDB(object):
     def exist_sensor(self, key, db, sensor):
         """Checks if a sensor exists in database"""
         if db not in self.db or len(self.db[db].keys()) == 0:
-            return False  # Empty database, no sensor available and auth cannot be checked
+            return (
+                False  # Empty database, no sensor available and auth cannot be checked
+            )
         self._check_auth(key, Actions.READ, db, sensor)
-        if not self.exist_db(key, db) or sensor not in self.db[db].keys() or \
-                not os.path.isdir(self.FU.path(db, sensor)):
+        if (
+            not self.exist_db(key, db)
+            or sensor not in self.db[db].keys()
+            or not os.path.isdir(self.FU.path(db, sensor))
+        ):
             return False
         return True
 
@@ -156,9 +153,7 @@ class OngTSDB(object):
         self._check_auth(admin_key, Actions.CREATE, None, None)
         if self.exist_db(admin_key, db):
             raise ElementAlreadyExistsException(f"Database {db} already exists")
-        self.__create_internal_structure(
-            self.FU.path(db),
-            self.db.keys())
+        self.__create_internal_structure(self.FU.path(db), self.db.keys())
         self.db[db] = dict()
 
     def delete_db(self, admin_key, db):
@@ -180,8 +175,18 @@ class OngTSDB(object):
         else:
             return False
 
-    def create_sensor(self, admin_key, db, sensor, period, write_key, read_key, metrics, force_update=False,
-                      metadata=None):
+    def create_sensor(
+        self,
+        admin_key,
+        db,
+        sensor,
+        period,
+        write_key,
+        read_key,
+        metrics,
+        force_update=False,
+        metadata=None,
+    ):
         """
         Creates a new sensor in the db (a directory for the sensor with its CONFIG.JSON file)
         :param admin_key: admin key to create sensor
@@ -207,13 +212,13 @@ class OngTSDB(object):
                 self.__METADATA_KEY: metadata,
             }
             self.__create_internal_structure(
-                self.FU.path(db, sensor),
-                self.db[db].keys(),
-                ujson.dumps(config)
+                self.FU.path(db, sensor), self.db[db].keys(), ujson.dumps(config)
             )
             self.db[db][sensor] = config
         else:
-            raise ElementAlreadyExistsException(f"Sensor {sensor} already exist in {db}")
+            raise ElementAlreadyExistsException(
+                f"Sensor {sensor} already exist in {db}"
+            )
 
     def update_metadata(self, key, db, sensor, new_metadata):
         """Updates metadata of an existing sensor"""
@@ -223,7 +228,7 @@ class OngTSDB(object):
             self.__create_internal_structure(
                 self.FU.path(db, sensor),
                 self.db[db].keys(),
-                ujson.dumps(self.db[db][sensor])
+                ujson.dumps(self.db[db][sensor]),
             )
 
     def get_metrics(self, key, db, sensor, force_reload=False):
@@ -253,7 +258,15 @@ class OngTSDB(object):
         """Returns record size in columns of the np.array writen in the chunks"""
         return 2 + len(self.get_metrics(key, db, sensor))
 
-    def _replace_chunk(self, db, sensor, original_chunk_name, new_chunk_name, new_array=None, compressed=False):
+    def _replace_chunk(
+        self,
+        db,
+        sensor,
+        original_chunk_name,
+        new_chunk_name,
+        new_array=None,
+        compressed=False,
+    ):
         """
         Replaces a chunk with a new one (that can be the compressed version or adding additional columns)
         :param db: data base name
@@ -264,7 +277,9 @@ class OngTSDB(object):
         :return: None
         """
         if new_array is None:
-            new_array = self.FU.fast_read_np(self.get_FU_path(db, sensor, original_chunk_name), dtype=DTYPE)
+            new_array = self.FU.fast_read_np(
+                self.get_FU_path(db, sensor, original_chunk_name), dtype=DTYPE
+            )
         f = self.FU.safe_createfile(self.get_FU_path(db, sensor, new_chunk_name), "wb")
         f.write(new_array.tobytes())
         f.close()
@@ -285,26 +300,49 @@ class OngTSDB(object):
         period = self.db[db][sensor][self.__FREQ_KEY]
         write_key = self.db[db][sensor][self.__WRITE_KEY]
         read_key = self.db[db][sensor][self.__READ_KEY]
-        self.create_sensor(self.admin_key, db, sensor, period, write_key, read_key, metrics + new_metrics,
-                           force_update=True)
+        self.create_sensor(
+            self.admin_key,
+            db,
+            sensor,
+            period,
+            write_key,
+            read_key,
+            metrics + new_metrics,
+            force_update=True,
+        )
         self.config_reload()
         updated_metrics = self.get_metrics(key, db, sensor)
         for old_chunk_name in chunks_to_change:
-            a = self.FU.fast_read_np(self.get_FU_path(db, sensor, old_chunk_name), dtype=DTYPE)
-            new_array = np.concatenate((a[:, :-1],
-                                        np.full(shape=(a.shape[0], len(new_metrics)), dtype=a.dtype,
-                                                fill_value=fill_value),
-                                        a[:, -1][:, None]),
-                                       axis=1)
-            parts = re_chunk_filename.match(old_chunk_name).groupdict()
-            compressed = parts['compression'] is not None
-            new_chunk_name = chunker.chunk_name(int(parts['timestamp']),
-                                                int(parts['n_columns']) + len(new_metrics),
-                                                compressed)
-            self._replace_chunk(db, sensor, old_chunk_name, new_chunk_name, new_array, compressed)
+            a = self.FU.fast_read_np(
+                self.get_FU_path(db, sensor, old_chunk_name), dtype=DTYPE
+            )
+            new_array = np.concatenate(
+                (
+                    a[:, :-1],
+                    np.full(
+                        shape=(a.shape[0], len(new_metrics)),
+                        dtype=a.dtype,
+                        fill_value=fill_value,
+                    ),
+                    a[:, -1][:, None],
+                ),
+                axis=1,
+            )
+            parts = re_chunk_filename.fullmatch(old_chunk_name).groupdict()
+            compressed = parts["compression"] is not None
+            new_chunk_name = chunker.chunk_name(
+                int(parts["timestamp"]),
+                int(parts["n_columns"]) + len(new_metrics),
+                compressed,
+            )
+            self._replace_chunk(
+                db, sensor, old_chunk_name, new_chunk_name, new_array, compressed
+            )
         pass
 
-    def write_tick_numpy(self, key, db, sensor, np_values: np.array, np_timestamps=None):
+    def write_tick_numpy(
+        self, key, db, sensor, np_values: np.array, np_timestamps=None
+    ):
         """
         Writes a numpy array of tick data into database
         :param key: key for authentication
@@ -319,32 +357,52 @@ class OngTSDB(object):
         self.exist_sensor(key, db, sensor)
         if np_values.shape[1] != len(self.get_metrics(key, db, sensor)):
             raise InvalidDataWriteException("Invalid number of cols of numpy array")
-        # Give default value to timestamp and convert to millis from nanos
+        # Give default value to timestamp if not provided.
         if np_timestamps is None:
-            np_timestamps = time.time() * np.ones((np_values, 1))
+            np_timestamps = np.full(np_values.shape[0], time.time(), dtype=np.float64)
         cols_chunk_array = self.__get_array_size(key, db, sensor)
         chunker = self.get_chunker(key, db, sensor)
-        chunk_name = self.FU.path(db, sensor, chunker.chunk_name(np_timestamps[0], cols_chunk_array))
+        chunk_name = self.FU.path(
+            db, sensor, chunker.chunk_name(np_timestamps[0], cols_chunk_array)
+        )
         pos = chunker.getpos(np_timestamps)
         # print(f"Writen in chunk: {chunk_name=} {pos=} {timestamp=}")
         with self._lock:
             if not os.path.isfile(chunk_name):
-                f = self.FU.safe_createfile(chunk_name, 'wb')
+                f = self.FU.safe_createfile(chunk_name, "wb")
                 # Default values are NaN instead of 0's
-                value_write = np.full((chunker.n_rows_per_chunk, cols_chunk_array),
-                                      fill_value=np.nan, dtype=np_values.dtype)
+                value_write = np.full(
+                    (chunker.n_rows_per_chunk, cols_chunk_array),
+                    fill_value=np.nan,
+                    dtype=DTYPE,
+                )
             else:
                 # Open for read only
-                f = self.FU.get_open_func(chunk_name)(chunk_name, 'rb')
-                value_write = np.frombuffer(f.read(), dtype=np_values.dtype)
-                value_write.shape = (chunker.n_rows_per_chunk, cols_chunk_array)
+                f = self.FU.get_open_func(chunk_name)(chunk_name, "rb")
+                raw = f.read()
                 f.close()
+                # Defensive: refuse to overwrite a corrupt chunk. Reading with
+                # the wrong dtype (e.g. float64) is the easiest way to
+                # silently destroy data, so we always read with DTYPE.
+                expected_bytes = (
+                    chunker.n_rows_per_chunk * cols_chunk_array * DTYPE.itemsize
+                )
+                if len(raw) != expected_bytes:
+                    raise InvalidDataWriteException(
+                        f"Refusing to overwrite corrupt chunk {chunk_name!r}: "
+                        f"expected {expected_bytes} bytes, got {len(raw)}. "
+                        f"Inspect manually before proceeding."
+                    )
+                value_write = np.frombuffer(raw, dtype=DTYPE)
+                value_write.shape = (chunker.n_rows_per_chunk, cols_chunk_array)
                 # Reopen for writing
-                f = self.FU.get_open_func(chunk_name)(chunk_name, 'wb')
+                f = self.FU.get_open_func(chunk_name)(chunk_name, "wb")
 
             value_write = np.array(value_write)  # Make sure it is contiguous
             idx_not_nan = np.nonzero(~np.isnan(np_values))  # Write only not nan values
-            value_write[pos[idx_not_nan[0]], idx_not_nan[1] + 1] = np_values[idx_not_nan]
+            value_write[pos[idx_not_nan[0]], idx_not_nan[1] + 1] = np_values[
+                idx_not_nan
+            ]
             vw = value_write[pos, 1:-1]
             value_write[pos, -1] = np.ma.masked_array(vw, np.isnan(vw)).sum(axis=1)
             value_write[pos, 0] = pos + 1
@@ -352,9 +410,10 @@ class OngTSDB(object):
             f.close()
 
     def np2pd(self, key, db, sensor, dates, values, tz=LOCAL_TZ):
-        dateindex = pd.to_datetime(dates, unit='s', utc=True).tz_convert(tz)
-        return pd.DataFrame(values, index=dateindex,
-                            columns=self.get_metrics(key, db, sensor))
+        dateindex = pd.to_datetime(dates, unit="s", utc=True).tz_convert(tz)
+        return pd.DataFrame(
+            values, index=dateindex, columns=self.get_metrics(key, db, sensor)
+        )
 
     def get_chunker(self, key, db, sensor):
         """
@@ -395,8 +454,9 @@ class OngTSDB(object):
         """
         values = None
         dates = None
-        for new_dates, new_values, step in self.read_iter(key, db, sensor, start_ts,
-                                                          end_ts):
+        for new_dates, new_values, step in self.read_iter(
+            key, db, sensor, start_ts, end_ts
+        ):
             if values is None:
                 values = new_values
                 dates = new_dates
@@ -409,8 +469,7 @@ class OngTSDB(object):
     def get_FU_path(self, *args):
         return self.FU.path(*args)
 
-    def read_iter(self, key, db, sensor, start_ts=None, end_ts=None,
-                  step=None):
+    def read_iter(self, key, db, sensor, start_ts=None, end_ts=None, step=None):
         """
         Reads data from the DB and returns an iterator that gives data chunk by chunk
         as numpy arrays.
@@ -461,16 +520,31 @@ class OngTSDB(object):
         class Cache(object):
             pass
 
-        def cache_read(cache, file_name, start_t, end_ts, SHAPE, is_last_chunk, chunk_ts, tick_duration):
-            new_dates, new_values = self._read_chunk(file_name, start_t, end_ts,
-                                                     SHAPE, is_last_chunk, chunk_ts,
-                                                     tick_duration)
+        def cache_read(
+            cache,
+            file_name,
+            start_t,
+            end_ts,
+            SHAPE,
+            is_last_chunk,
+            chunk_ts,
+            tick_duration,
+        ):
+            new_dates, new_values = self._read_chunk(
+                file_name,
+                start_t,
+                end_ts,
+                SHAPE,
+                is_last_chunk,
+                chunk_ts,
+                tick_duration,
+            )
             cache.data_available = True
             cache.d = new_dates
             cache.v = new_values
             cache.fn = file_name
 
-        if not hasattr(self, 'cache'):
+        if not hasattr(self, "cache"):
             self.cache = dict()
         self.cache[now] = Cache()
         self.cache[now].data_available = False
@@ -500,23 +574,48 @@ class OngTSDB(object):
             if cache.data_available and cache.fn == file_name:
                 new_dates, new_values = cache.d, cache.v
             else:
-                new_dates, new_values = self._read_chunk(file_name, start_ts, end_ts,
-                                                         SHAPE, is_last_chunk, chunk_ts,
-                                                         chunker.tick_duration)
+                new_dates, new_values = self._read_chunk(
+                    file_name,
+                    start_ts,
+                    end_ts,
+                    SHAPE,
+                    is_last_chunk,
+                    chunk_ts,
+                    chunker.tick_duration,
+                )
             cache.data_available = False
             if not is_last_chunk:
-                start_new_thread(cache_read, (cache, next_file_name, start_ts,
-                                              end_ts, SHAPE, is_last_chunk, chunker.chunk_timestamp(chunk),
-                                              chunker.tick_duration))
+                start_new_thread(
+                    cache_read,
+                    (
+                        cache,
+                        next_file_name,
+                        start_ts,
+                        end_ts,
+                        SHAPE,
+                        is_last_chunk,
+                        chunker.chunk_timestamp(chunk),
+                        chunker.tick_duration,
+                    ),
+                )
 
             #            o.toc("read chunk")
             if new_dates is not None:
                 yield new_dates, new_values, chunker.tick_duration
             if chunker.chunk_timestamp(chunk) > end_ts:
                 break
-        del (self.cache[now])
+        del self.cache[now]
 
-    def _read_chunk(self, file_name, start_ts, end_ts, SHAPE, is_last_chunk, chunk_ts: int, tick_duration: float):
+    def _read_chunk(
+        self,
+        file_name,
+        start_ts,
+        end_ts,
+        SHAPE,
+        is_last_chunk,
+        chunk_ts: int,
+        tick_duration: float,
+    ):
         if os.path.isfile(file_name):
             #            o.tic()
             orig_chunk_value = self.FU.fast_read_np(file_name, SHAPE, dtype=DTYPE)
@@ -529,19 +628,30 @@ class OngTSDB(object):
             if is_last_chunk:
                 idx_filter = idx_filter & (timestamps <= end_ts)
             chunk_value = orig_chunk_value[idx_filter, :]
-            if chunk_value.shape[0] < len(orig_chunk_value[:, 0].nonzero()):
-                print("oh oohhhhhhh, read empty chunk!")
+            n_nonzero = int((orig_chunk_value[:, 0] != 0).sum())
+            if chunk_value.shape[0] < n_nonzero:
+                logger.warning(
+                    f"Filter dropped rows in {file_name!r}: had {n_nonzero} "
+                    f"non-empty rows, returned {chunk_value.shape[0]}. "
+                    f"Chunk integrity should be checked."
+                )
             new_dates = timestamps[idx_filter]
             # Verify checksum
             if len(chunk_value) > 0:
                 value_check = chunk_value[:, 1:-1]
-                checksum_ok = np.isclose(np.ma.masked_array(value_check, np.isnan(value_check)).sum(1),
-                                         chunk_value[:, -1])
+                checksum_ok = np.isclose(
+                    np.ma.masked_array(value_check, np.isnan(value_check)).sum(1),
+                    chunk_value[:, -1],
+                )
                 if not checksum_ok.all():
                     invalids = (checksum_ok != 0).nonzero()[0]
                     chunk_value = chunk_value[checksum_ok, :]
                     new_dates = new_dates[checksum_ok]
-                    logger.warning("Found {} bad checksum(s) in chunk {}".format(len(invalids), file_name))
+                    logger.warning(
+                        "Found {} bad checksum(s) in chunk {}".format(
+                            len(invalids), file_name
+                        )
+                    )
                     logger.warning("Invalid indexes: ")
                     logger.warning(invalids)
             new_values = chunk_value[:, range(1, SHAPE[1] - 1, 1)]
@@ -557,7 +667,7 @@ class OngTSDB(object):
 
     def get_mdf5(self, file_name):
         if os.path.isfile(file_name):
-            return hashlib.md5(open(file_name, 'rb').read()).hexdigest()
+            return hashlib.md5(open(file_name, "rb").read()).hexdigest()
         else:
             return 0
 

@@ -1,0 +1,161 @@
+import os
+import re
+import stat
+
+import numpy as np
+import pytest
+
+from ong_tsdb import CHUNK_ROWS, COMPRESSION_EXT
+from ong_tsdb.fileutils import (
+    DTYPE,
+    FileUtils,
+    extract_filename_parts,
+    re_chunk_filename,
+    _get_chunkcolumns,
+)
+
+
+@pytest.fixture
+def fu(tmp_path):
+    """FileUtils rooted in a temp dir, no real user/group checks needed."""
+    return FileUtils(base_path=str(tmp_path))
+
+
+def _make_chunk(path, n_cols, n_rows=CHUNK_ROWS, fill=0.0):
+    """Create a chunk file. n_cols is the TOTAL array width
+    (matches the value in the filename's `<n_cols>` segment)."""
+    arr = np.full((n_rows, n_cols), fill, dtype=DTYPE)
+    arr[:, 0] = 0  # all rows marked as empty
+    with open(path, "wb") as f:
+        f.write(arr.tobytes())
+    return arr
+
+
+DTYPE_ITEMSIZE = np.dtype(DTYPE).itemsize
+
+
+def test_extract_filename_parts_valid_gz():
+    parts = extract_filename_parts("1234.5.gz")
+    assert parts == {"timestamp": "1234", "n_columns": "5", "compression": ".gz"}
+
+
+def test_extract_filename_parts_valid_uncompressed():
+    parts = extract_filename_parts("1234.5")
+    assert parts == {"timestamp": "1234", "n_columns": "5", "compression": None}
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    [
+        "1234.5.gz.bak",
+        "1234.5.gz\n",
+        ".1234.5",
+        "1234.5.",
+        "abc.5.gz",
+        "1234..gz",
+        "1234",
+    ],
+)
+def test_extract_filename_parts_rejects_malformed(bad_name):
+    with pytest.raises(ValueError, match="does not match chunk pattern"):
+        extract_filename_parts(bad_name)
+
+
+def test_regex_is_anchored_at_end():
+    # fullmatch must reject names with extra trailing junk
+    assert re_chunk_filename.fullmatch("1234.5.gz.bak") is None
+    assert re_chunk_filename.fullmatch("1234.5") is not None
+
+
+def test_get_chunkcolumns_uses_filename_n_columns():
+    assert _get_chunkcolumns("1234.5") == 5
+    assert _get_chunkcolumns("1234.5.gz") == 5
+
+
+def test_safe_createfile_sets_owner_permissions(tmp_path, fu):
+    path = str(tmp_path / "test.txt")
+    with fu.safe_createfile(path, "w") as f:
+        f.write("hi")
+    mode = stat.S_IMODE(os.stat(path).st_mode)
+    # 'other' must not have write permission.
+    assert mode & stat.S_IWOTH == 0
+
+
+def test_fast_read_np_happy_path(tmp_path, fu):
+    path = str(tmp_path / "0.5")
+    _make_chunk(path, n_cols=5)
+    arr = fu.fast_read_np(path)
+    assert arr.shape == (CHUNK_ROWS, 5)
+    assert arr.dtype == np.float32
+
+
+def test_fast_read_np_corrupt_raises_with_context(tmp_path, fu):
+    # File advertises 6 columns but is 1024 elements (4 KB) short of the
+    # expected 16384 * 6 = 98304 elements.
+    path = str(tmp_path / "0.6")
+    expected = np.full((CHUNK_ROWS, 6), 0.0, dtype=DTYPE)
+    raw = expected.tobytes()[: (CHUNK_ROWS * 6 - 1024) * DTYPE_ITEMSIZE]
+    with open(path, "wb") as f:
+        f.write(raw)
+
+    with pytest.raises(ValueError) as ctx:
+        fu.fast_read_np(path)
+    msg = str(ctx.value)
+    assert "Corrupt chunk" in msg
+    assert "expected 98304 elements" in msg
+    assert "got 97280 elements" in msg
+    assert "Missing 1024 elements" in msg
+    assert "4096 bytes" in msg
+    assert path in msg
+
+
+def test_fast_read_np_wrong_columns_in_filename(tmp_path, fu):
+    # Filename says 5 columns but file has the byte count for 6.
+    path = str(tmp_path / "0.5")
+    arr = np.zeros((CHUNK_ROWS, 6), dtype=DTYPE)
+    with open(path, "wb") as f:
+        f.write(arr.tobytes())
+    with pytest.raises(ValueError, match="Corrupt chunk"):
+        fu.fast_read_np(path)
+
+
+def test_fast_read_np_empty_file(tmp_path, fu):
+    # Empty file: returns a full-shape NaN array. This preserves the
+    # original behavior and is the sensible thing to do (callers filter
+    # empty rows by checking positions > 0).
+    path = str(tmp_path / "0.5")
+    with open(path, "wb"):
+        pass
+    arr = fu.fast_read_np(path)
+    assert arr.shape == (CHUNK_ROWS, 5)
+    assert arr.dtype == np.float32
+    assert np.isnan(arr).all()
+
+
+def test_verify_all_chunks_detects_truncated(tmp_path, fu):
+    # Sensor 1: 2 valid chunks
+    sensor1 = tmp_path / "db" / "s1"
+    sensor1.mkdir(parents=True)
+    (sensor1 / "CONFIG.JSON").write_text("{}")
+    _make_chunk(str(sensor1 / "0.5"), n_cols=5)
+    _make_chunk(str(sensor1 / "131072.5"), n_cols=5)
+
+    # Sensor 2: 1 valid + 1 corrupt
+    sensor2 = tmp_path / "db" / "s2"
+    sensor2.mkdir(parents=True)
+    (sensor2 / "CONFIG.JSON").write_text("{}")
+    _make_chunk(str(sensor2 / "0.5"), n_cols=5)
+    raw = np.zeros((CHUNK_ROWS, 5), dtype=DTYPE).tobytes()
+    with open(sensor2 / "131072.5", "wb") as f:
+        f.write(raw[: len(raw) - 4 * DTYPE_ITEMSIZE])  # 16 bytes short
+
+    corrupt = fu.verify_all_chunks(print_per_chunk_data=False)
+    assert len(corrupt) == 1
+    fpath, msg, _, _ = corrupt[0]
+    assert fpath.endswith("131072.5")
+    assert "Corrupt chunk" in msg
+
+
+def test_verify_all_chunks_empty_db(tmp_path, fu):
+    # No databases at all: should not raise
+    assert fu.verify_all_chunks(print_per_chunk_data=False) == []

@@ -22,15 +22,26 @@ from ong_tsdb import config, BASE_DIR, COMPRESSION_EXT, logger, DTYPE, CHUNK_ROW
 from pprint import pprint
 
 
-# Regular expression for parsing chunk filenames
+# Regular expression for parsing chunk filenames. Anchored at end (\Z) so that
+# leftover or renamed files (e.g. "1234.5.gz.bak") do not partially match and
+# silently produce wrong metadata.
 re_chunk_filename = re.compile(
-    rf"(?P<timestamp>\d+).(?P<n_columns>\d+)(?P<compression>{COMPRESSION_EXT})?"
+    rf"(?P<timestamp>\d+)\.(?P<n_columns>\d+)(?P<compression>{re.escape(COMPRESSION_EXT)})?\Z"
 )
 
 
 def extract_filename_parts(filename):
-    """Returns named groups from filename using re_chunk_filename regular expression"""
-    return re_chunk_filename.match(os.path.basename(filename)).groupdict()
+    """Returns named groups from filename using re_chunk_filename regular expression.
+
+    Raises ValueError if the filename does not match the chunk pattern.
+    """
+    m = re_chunk_filename.fullmatch(os.path.basename(filename))
+    if m is None:
+        raise ValueError(
+            f"Filename {filename!r} does not match chunk pattern "
+            f"(expected '<timestamp>.<n_columns>[.gz]')"
+        )
+    return m.groupdict()
 
 
 def generate_filename_from_parts(path, timestamp, n_columns, compression=""):
@@ -52,7 +63,7 @@ def _get_chunkfiles(path):
     files = [
         f.name
         for f in p.iterdir()
-        if f.is_file() and re_chunk_filename.match(f.name) and f.stat().st_size > 0
+        if f.is_file() and re_chunk_filename.fullmatch(f.name) and f.stat().st_size > 0
     ]
     files.sort()
     return files
@@ -95,14 +106,14 @@ class FileUtils(object):
                 else grp.getgrnam(file_group).gr_gid
             )
             self.userid = (
-                file_user if isinstance(file_group, int) else getpwnam(file_user).pw_uid
+                file_user if isinstance(file_user, int) else getpwnam(file_user).pw_uid
             )
-        except:
+        except (KeyError, OSError) as e:
             raise KeyError(
                 "User or Group {} does not exist. Create it with the setup script install.sh".format(
                     file_group
                 )
-            )
+            ) from e
 
         self.__path = os.path.abspath(base_path or "..")
         if not os.path.isdir(base_path):
@@ -234,8 +245,18 @@ class FileUtils(object):
     def verify_all_chunks(
         self, filter_db_name=None, dtype=DTYPE, print_per_chunk_data=True
     ):
-        """Gives some statistics on the chunks of a certain DB (or all if not db_name)"""
+        """Gives some statistics on the chunks of a certain DB (or all if not db_name).
+
+        Corrupt chunks (those that cannot be parsed as a numpy array of the
+        expected shape) are logged and collected; the function does not raise
+        on corruption so the user can scan an entire database in one pass.
+
+        Returns
+            list of tuples (filepath, error_message, prev_diff, date) for each
+            corrupt chunk discovered.
+        """
         total_data = 0
+        corrupt = []
         for db_name in self.getdbs():
             if filter_db_name and db_name != filter_db_name:
                 continue
@@ -249,18 +270,29 @@ class FileUtils(object):
                         difference = timestamps[i] - timestamps[i - 1]
                     else:
                         difference = None
+                    fpath = self.path(sensorpath, chunkfiles[i])
                     print("{} - {} - {}".format(timestamps[i], difference, dates[i]))
-                    stat = self.__verify_chunk_content(
-                        self.path(sensorpath, chunkfiles[i]),
-                        dtype=dtype,
-                        print_summary_stats=print_per_chunk_data,
-                    )
-                    total_data += stat["rows_used"]
+                    try:
+                        stat = self.__verify_chunk_content(
+                            fpath,
+                            dtype=dtype,
+                            print_summary_stats=print_per_chunk_data,
+                        )
+                        total_data += stat["rows_used"]
+                    except ValueError as e:
+                        logger.error(f"Corrupt chunk: {fpath} -- {e}")
+                        corrupt.append((fpath, str(e), difference, dates[i]))
                 print()
                 print(f"Summary for db_name={db_name} sensor={sensor}")
                 print(f"Number of chunks: {len(chunkfiles)}")
                 print(f"Number of used rows: {total_data}")
                 print()
+        if corrupt:
+            print(f"\n=== Found {len(corrupt)} corrupt chunk(s) ===")
+            for fpath, msg, diff, date in corrupt:
+                print(f"  {fpath}  (ts={date}, prev_diff={diff})")
+                print(f"    {msg}")
+        return corrupt
 
     def get_open_func(self, filename):
         """Returns function to open file. If file is compressed uses gzip.open else uses standard open"""
@@ -271,28 +303,52 @@ class FileUtils(object):
             return open
 
     def fast_read_np(self, filename, shape=None, dtype=DTYPE):
-        """Reads a chunk file into a numpy array"""
+        """Reads a chunk file into a numpy array.
+
+        Raises ValueError with a detailed message (path, expected size, actual
+        size, missing bytes) if the file is corrupt: a chunk whose byte size
+        does not match the expected `CHUNK_ROWS * (n_columns + 2) * itemsize`.
+        """
         if not os.path.isfile(filename):
             return None
 
         open_func = self.get_open_func(filename)
+        itemsize = np.dtype(dtype).itemsize
 
-        # arr = np.fromfile(filename, dtype=dtype)
         with open_func(filename, "rb") as f:
             buff = f.read()
         arr = np.frombuffer(buff, dtype=dtype)
 
         if shape is None:
-            # The size in bytes must be turned into a numpy array, correcting by numpy columns and dtype size
             n_cols = _get_chunkcolumns(filename)
-            shape = int(arr.shape[0] / n_cols), n_cols
+            # The number of rows is fixed by CHUNK_ROWS, not by the file's
+            # current byte count (a truncated file would yield a wrong
+            # row count if we divided). We trust the constant and validate
+            # the file size against it.
+            shape = (CHUNK_ROWS, n_cols)
 
-        if arr.shape[0] == 0:
-            # If the file is empty, return an empty array with the correct shape
-            arr = np.full(shape, None, dtype=dtype)
-        else:
+        expected = shape[0] * shape[1]
+
+        if arr.shape[0] == expected:
             arr.shape = shape
-        return arr
+            return arr
+
+        if arr.shape[0] == 0 and shape == (CHUNK_ROWS, _get_chunkcolumns(filename)):
+            # Empty file with an implicit (auto-detected) shape: preserve
+            # the original behavior of returning a full-shape NaN array.
+            # Callers filter empty rows by checking `positions > 0`.
+            return np.full(shape, np.nan, dtype=dtype)
+
+        # Otherwise the file is corrupt: report a rich error.
+        bytes_expected = expected * itemsize
+        bytes_actual = arr.shape[0] * itemsize
+        raise ValueError(
+            f"Corrupt chunk {filename!r}: expected {expected} elements "
+            f"({shape[0]} rows x {shape[1]} cols, dtype={np.dtype(dtype).name}, "
+            f"{bytes_expected} bytes), got {arr.shape[0]} elements "
+            f"({bytes_actual} bytes). Missing {expected - arr.shape[0]} elements "
+            f"({bytes_expected - bytes_actual} bytes). Likely a truncated write."
+        )
 
 
 if __name__ == "__main__":
