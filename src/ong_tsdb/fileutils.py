@@ -5,11 +5,13 @@ Created on Wed Jan  4 00:48:46 2017
 
 @author: ongpi
 """
+
 import time
 import os
 from pathlib import Path
 import re
 from ong_utils import is_windows
+
 if not is_windows:
     import grp
     from pwd import getpwnam
@@ -21,11 +23,13 @@ from pprint import pprint
 
 
 # Regular expression for parsing chunk filenames
-re_chunk_filename = re.compile(rf"(?P<timestamp>\d+).(?P<n_columns>\d+)(?P<compression>{COMPRESSION_EXT})?")
+re_chunk_filename = re.compile(
+    rf"(?P<timestamp>\d+).(?P<n_columns>\d+)(?P<compression>{COMPRESSION_EXT})?"
+)
 
 
 def extract_filename_parts(filename):
-    """Returns named groups from filename using re_chunk_filename regular expression """
+    """Returns named groups from filename using re_chunk_filename regular expression"""
     return re_chunk_filename.match(os.path.basename(filename)).groupdict()
 
 
@@ -39,15 +43,15 @@ def generate_filename_from_parts(path, timestamp, n_columns, compression=""):
 
 def _get_subdirs(path):
     """Returns the list of subdirs of current path"""
-    return [n for n in os.listdir(path)
-            if os.path.isdir(os.path.join(path, n))]
+    return [n for n in os.listdir(path) if os.path.isdir(os.path.join(path, n))]
 
 
 def _get_chunkfiles(path):
     """Returns a sorted list of chunk (either compressed or uncompressed files), excluding empty files"""
     p = Path(path)
     files = [
-        f.name for f in p.iterdir()
+        f.name
+        for f in p.iterdir()
         if f.is_file() and re_chunk_filename.match(f.name) and f.stat().st_size > 0
     ]
     files.sort()
@@ -57,7 +61,7 @@ def _get_chunkfiles(path):
 def _get_chunkcolumns(filename):
     # Returns number of columns of the chunk from its filename.
     # Chunks have a "{timestamp}.{n_columns}[.gz]" name, so extracts the {size} part
-    return int(extract_filename_parts(filename)['n_columns'])
+    return int(extract_filename_parts(filename)["n_columns"])
 
 
 class FileUtils(object):
@@ -65,9 +69,12 @@ class FileUtils(object):
     Class to manage files and dirs with correct permissions
     """
 
-    def __init__(self, base_path=BASE_DIR,
-                 file_user=config("FILE_USER", os.getuid()),
-                 file_group=config("FILE_GROUP", os.getgid())):
+    def __init__(
+        self,
+        base_path=BASE_DIR,
+        file_user=config("FILE_USER", os.getuid()),
+        file_group=config("FILE_GROUP", os.getgid()),
+    ):
         """
         Creates FileUtils object
 
@@ -82,17 +89,28 @@ class FileUtils(object):
             Exception if file_user or file_group does not exist
         """
         try:
-            self.groupid = file_group if isinstance(file_group, int) else grp.getgrnam(file_group).gr_gid
-            self.userid = file_user if isinstance(file_group, int) else getpwnam(file_user).pw_uid
+            self.groupid = (
+                file_group
+                if isinstance(file_group, int)
+                else grp.getgrnam(file_group).gr_gid
+            )
+            self.userid = (
+                file_user if isinstance(file_group, int) else getpwnam(file_user).pw_uid
+            )
         except:
             raise KeyError(
-                "User or Group {} does not exist. Create it with the setup script install.sh".format(file_group))
+                "User or Group {} does not exist. Create it with the setup script install.sh".format(
+                    file_group
+                )
+            )
 
         self.__path = os.path.abspath(base_path or "..")
         if not os.path.isdir(base_path):
             admin_token = config("admin_token", None)
             if admin_token is None:
-                raise Exception('Database cannot be created, add "admin_token" to your configuration file')
+                raise Exception(
+                    'Database cannot be created, add "admin_token" to your configuration file'
+                )
             # Create root dir
             os.makedirs(base_path)
             self.__path = os.path.abspath(base_path)
@@ -157,12 +175,14 @@ class FileUtils(object):
 
     def __fix_permissions(self, path):
         """
-        Changes permissions and owner of a file/directory 
+        Changes permissions and owner of a file/directory
         Permissions are set to read+write for the user and group used
         to initialize the class, no permissions for others.
         Not the safer implementation (as it is changed after file creation)
         """
-        stat_mode = stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP  # This is 0o600 in octal and 384 in decimal.
+        stat_mode = (
+            stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
+        )  # This is 0o600 in octal and 384 in decimal.
         if os.path.isdir(path):
             stat_mode = stat_mode | stat.S_IXUSR | stat.S_IXGRP
         os.chmod(path, stat_mode)
@@ -184,49 +204,36 @@ class FileUtils(object):
         Raises
             OSError if path is not valid
         """
-
-        # TODO: fix permissions
         f = self.get_open_func(path)(path, mode)
         self.__fix_permissions(path)
         return f
-
-        # This works, but safer it not used...
-        flags = os.O_WRONLY | os.O_CREAT  # | os.O_EXCL  # Refer to "man 2 open".
-        stat_mode = stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP  # This is 0o600 in octal and 384 in decimal.
-
-        #        f = open(path, mode)
-        #        return f
-        # Open file descriptor
-        umask_original = os.umask(0)
-        try:
-            fdesc = os.open(path, flags, stat_mode)
-        finally:
-            os.umask(umask_original)
-        fdesc = os.open(path, flags, stat_mode)
-        os.fchmod(fdesc, stat_mode)
-        os.fchown(fdesc, self.userid, self.groupid)
-        return os.fdopen(fdesc, mode)
 
     def __verify_chunk_content(self, filename, dtype=DTYPE, print_summary_stats=True):
         """Prints to screen the analysis of the chunk file filename"""
         arr = self.fast_read_np(filename, dtype=dtype)
         if arr.shape[0] != CHUNK_ROWS:
-            logger.error(f"Error in {filename}: expected {CHUNK_ROWS} rows but file has {arr.shape[0]}")
+            logger.error(
+                f"Error in {filename}: expected {CHUNK_ROWS} rows but file has {arr.shape[0]}"
+            )
         index = arr[:, 0].nonzero()[0]
         min_index = index[0] if len(index) > 0 else -1
         max_index = index[-1] if len(index) > 0 else -1
-        stat = dict(filename=filename,
-                    rows_total=len(arr),
-                    rows_used=len(index),
-                    rows_used_ratio_pct=len(index) / float(len(arr)) * 100,
-                    row_index_min=min_index, row_index_max=max_index,
-                    ratio_max_index=(max_index + 1) / float(len(arr))
-                    )
+        stat = dict(
+            filename=filename,
+            rows_total=len(arr),
+            rows_used=len(index),
+            rows_used_ratio_pct=len(index) / float(len(arr)) * 100,
+            row_index_min=min_index,
+            row_index_max=max_index,
+            ratio_max_index=(max_index + 1) / float(len(arr)),
+        )
         if print_summary_stats:
             pprint(stat)
         return stat
 
-    def verify_all_chunks(self, filter_db_name=None, dtype=DTYPE, print_per_chunk_data=True):
+    def verify_all_chunks(
+        self, filter_db_name=None, dtype=DTYPE, print_per_chunk_data=True
+    ):
         """Gives some statistics on the chunks of a certain DB (or all if not db_name)"""
         total_data = 0
         for db_name in self.getdbs():
@@ -243,8 +250,11 @@ class FileUtils(object):
                     else:
                         difference = None
                     print("{} - {} - {}".format(timestamps[i], difference, dates[i]))
-                    stat = self.__verify_chunk_content(self.path(sensorpath, chunkfiles[i]), dtype=dtype,
-                                                       print_summary_stats=print_per_chunk_data)
+                    stat = self.__verify_chunk_content(
+                        self.path(sensorpath, chunkfiles[i]),
+                        dtype=dtype,
+                        print_summary_stats=print_per_chunk_data,
+                    )
                     total_data += stat["rows_used"]
                 print()
                 print(f"Summary for db_name={db_name} sensor={sensor}")
@@ -280,7 +290,7 @@ class FileUtils(object):
         if arr.shape[0] == 0:
             # If the file is empty, return an empty array with the correct shape
             arr = np.full(shape, None, dtype=dtype)
-        else:    
+        else:
             arr.shape = shape
         return arr
 

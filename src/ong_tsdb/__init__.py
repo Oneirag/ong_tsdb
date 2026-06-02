@@ -12,11 +12,9 @@ if not config("BASE_DIR", None):
     print("BASE_DIR config variable is not set. Using ~/ong_tsdb as default")
 BASE_DIR = os.path.expanduser(config("BASE_DIR", "~/ong_tsdb"))
 COMPRESSION_EXT = ".gz"
-# DTYPE = np.float32  # Dates would end if 2038 if used float32
-DTYPE = np.float64
 DTYPE = (
     np.float32
-)  # Now trying storing not the full TS but the offset with the TS start...
+)  # Timestamps are stored as offset, not as absolute dates, so 2038 is not a concern.
 CHUNK_ROWS = 2**14
 HTTP_COMPRESS_THRESHOLD = (
     1024  # Minimum number of data to activate compression in client and server
