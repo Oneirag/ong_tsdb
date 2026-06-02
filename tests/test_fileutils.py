@@ -159,3 +159,66 @@ def test_verify_all_chunks_detects_truncated(tmp_path, fu):
 def test_verify_all_chunks_empty_db(tmp_path, fu):
     # No databases at all: should not raise
     assert fu.verify_all_chunks(print_per_chunk_data=False) == []
+
+
+def test_atomic_write_creates_final_file(tmp_path, fu):
+    path = str(tmp_path / "atomic.bin")
+    with fu.safe_createfile(path, "wb") as f:
+        f.write(b"hello world")
+    assert os.path.isfile(path)
+    assert open(path, "rb").read() == b"hello world"
+    # No .tmp file remains
+    assert not any(e.startswith("atomic.bin.tmp.") for e in os.listdir(tmp_path))
+
+
+def test_atomic_write_preserves_existing_on_failure(tmp_path, fu, monkeypatch):
+    """If a write fails mid-stream, the existing file must be untouched."""
+    path = str(tmp_path / "atomic.bin")
+    with fu.safe_createfile(path, "wb") as f:
+        f.write(b"original content")
+    original_bytes = open(path, "rb").read()
+    assert original_bytes == b"original content"
+
+    # Patch get_open_func so that opening a .tmp file raises (simulating a
+    # crash before any data was written). The existing file must remain
+    # intact because os.replace never runs.
+    import os as _os
+
+    def boom_open(_self, filename):
+        if ".tmp." in _os.path.basename(filename):
+            return lambda p, m: (_ for _ in ()).throw(
+                OSError("simulated crash during write")
+            )
+        # Fall back to real gzip/open as appropriate
+        from ong_tsdb import COMPRESSION_EXT
+
+        if filename.endswith(COMPRESSION_EXT):
+            import gzip
+
+            return gzip.open
+        return open
+
+    monkeypatch.setattr(FileUtils, "get_open_func", boom_open)
+
+    with pytest.raises(OSError, match="simulated crash"):
+        with fu.safe_createfile(path, "wb") as f:
+            f.write(b"this should never reach disk")
+
+    # Original content must still be there
+    assert open(path, "rb").read() == original_bytes
+
+
+def test_atomic_write_cleans_stale_tmp(tmp_path, fu):
+    path = str(tmp_path / "atomic.bin")
+    # Simulate a previous crashed writer: leave a stale .tmp file
+    stale = path + ".tmp.99999.99999"
+    with open(stale, "wb") as f:
+        f.write(b"orphan")
+    assert os.path.isfile(stale)
+
+    # Next safe_createfile call should remove the stale .tmp before opening
+    with fu.safe_createfile(path, "wb") as f:
+        f.write(b"fresh")
+    assert open(path, "rb").read() == b"fresh"
+    # The stale file is gone
+    assert not os.path.isfile(stale)

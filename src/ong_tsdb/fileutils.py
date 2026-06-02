@@ -201,23 +201,56 @@ class FileUtils(object):
 
     def safe_createfile(self, path, mode="w"):
         """
-        Returns a file descriptor with correct owner and permissions
-        Permissions are set to read+write for the user and group,
-        no permissions for others
+        Opens `path` for writing atomically.
 
-        Args
-            path : string
-                Full path of the file to open
-            mode : string
-                File open mode (Default: "w")
-        Return
-            File descriptor
-        Raises
-            OSError if path is not valid
+        Data is written to a sibling temp file first; on close, the file is
+        renamed to its final name with `os.replace`, which is atomic on
+        POSIX and on Windows (Python 3.3+). If the process dies mid-write,
+        the original file (if any) is preserved and the `.tmp` file can be
+        safely removed. A `__cleanup_stale_tmp` call at open() time
+        removes any leftover temp file from a previous crashed writer.
+
+        Returns a file-like object whose `close()` performs the rename.
+        Raises OSError if `path` is not valid.
         """
-        f = self.get_open_func(path)(path, mode)
-        self.__fix_permissions(path)
+        # Clean up any leftover tmp from a previous crashed writer
+        for leftover in self._stale_tmp_files_for(path):
+            try:
+                os.remove(leftover)
+            except OSError:
+                pass
+
+        tmp_path = f"{path}.tmp.{os.getpid()}.{id(self)}"
+        f = self.get_open_func(tmp_path)(tmp_path, mode)
+        _original_close = f.close
+
+        def _safe_close():
+            _original_close()
+            try:
+                os.replace(tmp_path, path)
+            except FileNotFoundError:
+                # Nothing was written; tmp_path may not exist if mode was "r"
+                pass
+
+        f.close = _safe_close
+        self.__fix_permissions(tmp_path)
         return f
+
+    def _stale_tmp_files_for(self, path):
+        """Lists the names of stale .tmp.* files that would correspond to
+        a write of `path` (i.e. a previous writer crashed before close).
+        """
+        parent = os.path.dirname(path) or "."
+        prefix = os.path.basename(path) + ".tmp."
+        try:
+            entries = os.listdir(parent)
+        except OSError:
+            return []
+        return [
+            os.path.join(parent, e)
+            for e in entries
+            if e.startswith(prefix) and os.path.isfile(os.path.join(parent, e))
+        ]
 
     def __verify_chunk_content(self, filename, dtype=DTYPE, print_summary_stats=True):
         """Prints to screen the analysis of the chunk file filename"""

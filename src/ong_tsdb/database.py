@@ -44,25 +44,33 @@ class OngTSDB(object):
     __READ_KEY = "Read_Key"
     __WRITE_KEY = "Write_key"
 
-    _lock = threading.Lock()
+    # Class-level lock used only to serialize creation of per-sensor locks
+    # (see _get_sensor_lock). It is NOT used to guard chunk I/O.
+    _registry_lock = threading.Lock()
 
     def __init__(self, path=BASE_DIR):
         """Inits database in the path (defaults to BASE_DIR). There must be a CONFIG.JS in the path,
         otherwise it will be created with a new admin password that will be shown with logger.info"""
+        # Per-sensor locks: serialise chunk I/O for the same (db, sensor)
+        # without blocking work on other sensors. Created lazily.
+        self._sensor_locks: dict = {}
         self.FU = FileUtils(path)
         if not os.path.isfile(self.FU.path_config()):
-            os.makedirs(BASE_DIR)
-            FU = FileUtils()
+            # Bootstrap a new database at the requested path, NOT at the
+            # global BASE_DIR. The previous implementation always wrote the
+            # config to BASE_DIR, which was wrong when a custom path was
+            # passed.
+            os.makedirs(path, exist_ok=True)
             length = 20
             admin_key = "".join(random.sample(string.hexdigits, int(length)))
-            with FU.safe_createfile(FU.path_config(), "w") as f:
+            with self.FU.safe_createfile(self.FU.path_config(), "w") as f:
                 f.write(admin_key)
-            logger.info("DB correctly setup")
+            logger.info("DB correctly setup at %s", path)
             logger.info("Admin key is")
             logger.info("=" * length)
             logger.info(admin_key)
             logger.info("=" * length)
-            logger.info("You can check admin key in {}".format(FU.path_config()))
+            logger.info("You can check admin key in {}".format(self.FU.path_config()))
 
         with open(self.FU.path_config(), "r") as f:
             self.admin_key = f.readline().strip()
@@ -107,6 +115,22 @@ class OngTSDB(object):
             return False
         else:
             return self.db[db][sensor].get(key_name) == key_value
+
+    def _get_sensor_lock(self, db: str, sensor: str) -> threading.Lock:
+        """Returns the lock associated with (db, sensor), creating it on first use.
+
+        The returned lock must be acquired by every method that touches the
+        chunk files of that sensor (write_tick_numpy, add_new_metrics,
+        _replace_chunk). It is safe to call this from any thread; the
+        registry is itself protected by a class-level lock.
+        """
+        key = (db, sensor)
+        with self._registry_lock:
+            lock = self._sensor_locks.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                self._sensor_locks[key] = lock
+        return lock
 
     def _check_auth(self, key, action, db, sensor):
         """Checks if key is valid for the action in sensor. Raises exception otherwise"""
@@ -312,32 +336,36 @@ class OngTSDB(object):
         )
         self.config_reload()
         updated_metrics = self.get_metrics(key, db, sensor)
-        for old_chunk_name in chunks_to_change:
-            a = self.FU.fast_read_np(
-                self.get_FU_path(db, sensor, old_chunk_name), dtype=DTYPE
-            )
-            new_array = np.concatenate(
-                (
-                    a[:, :-1],
-                    np.full(
-                        shape=(a.shape[0], len(new_metrics)),
-                        dtype=a.dtype,
-                        fill_value=fill_value,
+        # Lock the sensor for the whole rewrite: this both serialises against
+        # concurrent write_tick_numpy calls and prevents a reader from
+        # observing a half-rewritten chunk directory.
+        with self._get_sensor_lock(db, sensor):
+            for old_chunk_name in chunks_to_change:
+                a = self.FU.fast_read_np(
+                    self.get_FU_path(db, sensor, old_chunk_name), dtype=DTYPE
+                )
+                new_array = np.concatenate(
+                    (
+                        a[:, :-1],
+                        np.full(
+                            shape=(a.shape[0], len(new_metrics)),
+                            dtype=a.dtype,
+                            fill_value=fill_value,
+                        ),
+                        a[:, -1][:, None],
                     ),
-                    a[:, -1][:, None],
-                ),
-                axis=1,
-            )
-            parts = re_chunk_filename.fullmatch(old_chunk_name).groupdict()
-            compressed = parts["compression"] is not None
-            new_chunk_name = chunker.chunk_name(
-                int(parts["timestamp"]),
-                int(parts["n_columns"]) + len(new_metrics),
-                compressed,
-            )
-            self._replace_chunk(
-                db, sensor, old_chunk_name, new_chunk_name, new_array, compressed
-            )
+                    axis=1,
+                )
+                parts = re_chunk_filename.fullmatch(old_chunk_name).groupdict()
+                compressed = parts["compression"] is not None
+                new_chunk_name = chunker.chunk_name(
+                    int(parts["timestamp"]),
+                    int(parts["n_columns"]) + len(new_metrics),
+                    compressed,
+                )
+                self._replace_chunk(
+                    db, sensor, old_chunk_name, new_chunk_name, new_array, compressed
+                )
         pass
 
     def write_tick_numpy(
@@ -367,7 +395,7 @@ class OngTSDB(object):
         )
         pos = chunker.getpos(np_timestamps)
         # print(f"Writen in chunk: {chunk_name=} {pos=} {timestamp=}")
-        with self._lock:
+        with self._get_sensor_lock(db, sensor):
             if not os.path.isfile(chunk_name):
                 f = self.FU.safe_createfile(chunk_name, "wb")
                 # Default values are NaN instead of 0's
@@ -385,7 +413,9 @@ class OngTSDB(object):
                 # the wrong dtype (e.g. float64) is the easiest way to
                 # silently destroy data, so we always read with DTYPE.
                 expected_bytes = (
-                    chunker.n_rows_per_chunk * cols_chunk_array * DTYPE.itemsize
+                    chunker.n_rows_per_chunk
+                    * cols_chunk_array
+                    * np.dtype(DTYPE).itemsize
                 )
                 if len(raw) != expected_bytes:
                     raise InvalidDataWriteException(
@@ -515,7 +545,6 @@ class OngTSDB(object):
         start_ts = chunker.tick_duration * (start_ts // chunker.tick_duration)
         end_ts = end_ts or time.time()
         chunk = start_ts
-        now = repr(time.time())
 
         class Cache(object):
             pass
@@ -530,6 +559,10 @@ class OngTSDB(object):
             chunk_ts,
             tick_duration,
         ):
+            # The main loop may have aborted by the time we run; in that case
+            # just discard the result instead of writing to a freed cache.
+            if not getattr(cache, "alive", False):
+                return
             new_dates, new_values = self._read_chunk(
                 file_name,
                 start_t,
@@ -546,9 +579,15 @@ class OngTSDB(object):
 
         if not hasattr(self, "cache"):
             self.cache = dict()
-        self.cache[now] = Cache()
-        self.cache[now].data_available = False
-        self.cache[now].fn = ""
+        if not hasattr(self, "_cache_counter"):
+            self._cache_counter = 0
+        self._cache_counter += 1
+        cache_key = self._cache_counter
+        cache_obj = Cache()
+        cache_obj.data_available = False
+        cache_obj.fn = ""
+        cache_obj.alive = True
+        self.cache[cache_key] = cache_obj
 
         def get_chunk_filename(chunk):
             for compressed in (False, True):
@@ -558,53 +597,57 @@ class OngTSDB(object):
                     return file_name
             return file_name
 
-        while True:
-            chunk_ts = chunker.chunk_timestamp(chunk)
-            is_last_chunk = chunk_ts == chunker.chunk_timestamp(end_ts)
+        try:
+            while True:
+                chunk_ts = chunker.chunk_timestamp(chunk)
+                is_last_chunk = chunk_ts == chunker.chunk_timestamp(end_ts)
 
-            file_name = get_chunk_filename(chunk)
-            # chunk_name = chunker.chunk_name(chunk, SHAPE[1])
-            # file_name = self.get_FU_path(db, sensor, chunk_name)
+                file_name = get_chunk_filename(chunk)
 
-            chunk += max(chunker.chunk_duration, step)
-            next_file_name = get_chunk_filename(chunk)
-            # next_file_name = self.get_FU_path(db, sensor, chunker.chunk_name(chunk, SHAPE[1]))
-            # perform a cache of next chunk here
-            cache = self.cache[now]
-            if cache.data_available and cache.fn == file_name:
-                new_dates, new_values = cache.d, cache.v
-            else:
-                new_dates, new_values = self._read_chunk(
-                    file_name,
-                    start_ts,
-                    end_ts,
-                    SHAPE,
-                    is_last_chunk,
-                    chunk_ts,
-                    chunker.tick_duration,
-                )
-            cache.data_available = False
-            if not is_last_chunk:
-                start_new_thread(
-                    cache_read,
-                    (
-                        cache,
-                        next_file_name,
+                chunk += max(chunker.chunk_duration, step)
+                next_file_name = get_chunk_filename(chunk)
+                cache = self.cache[cache_key]
+                if cache.data_available and cache.fn == file_name:
+                    new_dates, new_values = cache.d, cache.v
+                else:
+                    new_dates, new_values = self._read_chunk(
+                        file_name,
                         start_ts,
                         end_ts,
                         SHAPE,
                         is_last_chunk,
-                        chunker.chunk_timestamp(chunk),
+                        chunk_ts,
                         chunker.tick_duration,
-                    ),
-                )
+                    )
+                cache.data_available = False
+                if not is_last_chunk:
+                    start_new_thread(
+                        cache_read,
+                        (
+                            cache,
+                            next_file_name,
+                            start_ts,
+                            end_ts,
+                            SHAPE,
+                            is_last_chunk,
+                            chunker.chunk_timestamp(chunk),
+                            chunker.tick_duration,
+                        ),
+                    )
 
-            #            o.toc("read chunk")
-            if new_dates is not None:
-                yield new_dates, new_values, chunker.tick_duration
-            if chunker.chunk_timestamp(chunk) > end_ts:
-                break
-        del self.cache[now]
+                if new_dates is not None:
+                    yield new_dates, new_values, chunker.tick_duration
+                if chunker.chunk_timestamp(chunk) > end_ts:
+                    break
+        finally:
+            # Ensure the cache entry is removed even if the consumer breaks
+            # out of the generator (e.g. with .close()) or an exception
+            # propagates. The alive flag tells the background read thread
+            # to drop its result if it has not started yet.
+            cache_obj = self.cache.get(cache_key)
+            if cache_obj is not None:
+                cache_obj.alive = False
+            self.cache.pop(cache_key, None)
 
     def _read_chunk(
         self,
@@ -618,7 +661,19 @@ class OngTSDB(object):
     ):
         if os.path.isfile(file_name):
             #            o.tic()
-            orig_chunk_value = self.FU.fast_read_np(file_name, SHAPE, dtype=DTYPE)
+            try:
+                orig_chunk_value = self.FU.fast_read_np(file_name, SHAPE, dtype=DTYPE)
+            except ValueError as e:
+                # Corrupt chunk: skip it instead of taking down the whole
+                # read. The user can run `python -m ong_tsdb verify` to
+                # identify the offending file and decide whether to
+                # delete it (so the next write regenerates it) or
+                # restore it from backup.
+                logger.error(
+                    f"Skipping corrupt chunk {file_name!r}: {e}. "
+                    f"Run `python -m ong_tsdb verify --db <db>` to inspect."
+                )
+                return None, None
             if orig_chunk_value is None:
                 return None, None
             positions = orig_chunk_value[:, 0].astype(np.float64)
