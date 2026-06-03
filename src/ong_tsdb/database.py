@@ -65,12 +65,26 @@ class OngTSDB(object):
             admin_key = "".join(random.sample(string.hexdigits, int(length)))
             with self.FU.safe_createfile(self.FU.path_config(), "w") as f:
                 f.write(admin_key)
+            # Print the key ONCE to stdout with a clear banner so the user
+            # can copy it. Do NOT use logger.info here: persistent log files
+            # would end up storing the key in cleartext. The path to the
+            # config file is logged so it is recoverable later.
+            print()
+            print("=" * 60)
+            print("  ong_tsdb: NEW DATABASE created at {}".format(path))
+            print("  An admin key has been generated. Save it now:")
+            print()
+            print("    {}".format(admin_key))
+            print()
+            print("  Stored in: {}".format(self.FU.path_config()))
+            print("  This message is NOT logged. Copy the key above.")
+            print("=" * 60)
+            print()
             logger.info("DB correctly setup at %s", path)
-            logger.info("Admin key is")
-            logger.info("=" * length)
-            logger.info(admin_key)
-            logger.info("=" * length)
-            logger.info("You can check admin key in {}".format(self.FU.path_config()))
+            logger.info(
+                "Admin key generated (see %s); not logged for security",
+                self.FU.path_config(),
+            )
 
         with open(self.FU.path_config(), "r") as f:
             self.admin_key = f.readline().strip()
@@ -87,7 +101,7 @@ class OngTSDB(object):
                     data = []
                     with open(self.FU.path_config(db, sensor)) as f:
                         data = ujson.load(f)
-                except:
+                except Exception:
                     pass
                 sdb[db][sensor] = data
         self.db = sdb
