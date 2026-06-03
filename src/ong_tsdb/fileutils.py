@@ -276,13 +276,27 @@ class FileUtils(object):
         return stat
 
     def verify_all_chunks(
-        self, filter_db_name=None, dtype=DTYPE, print_per_chunk_data=True
+        self,
+        filter_db_name=None,
+        dtype=DTYPE,
+        print_per_chunk_data=True,
+        quiet=False,
     ):
         """Gives some statistics on the chunks of a certain DB (or all if not db_name).
 
         Corrupt chunks (those that cannot be parsed as a numpy array of the
         expected shape) are logged and collected; the function does not raise
         on corruption so the user can scan an entire database in one pass.
+
+        Args
+            filter_db_name : if set, only this database is scanned.
+            dtype : numpy dtype to use when reading chunks (default DTYPE).
+            print_per_chunk_data : if True, the pprint summary of every valid
+                chunk is printed (verbose).
+            quiet : if True, suppress the per-chunk output and the per-sensor
+                summary. Only the corrupt-chunk report is printed at the end
+                (if any). The function always returns the corrupt list
+                regardless of this flag.
 
         Returns
             list of tuples (filepath, error_message, prev_diff, date) for each
@@ -298,28 +312,34 @@ class FileUtils(object):
                 chunkfiles = _get_chunkfiles(sensorpath)
                 timestamps = [float(f.split(".")[0]) for f in chunkfiles]
                 dates = [time.asctime(time.gmtime(f)) for f in timestamps]
+                sensor_total = 0
                 for i in range(len(dates)):
                     if i > 0:
                         difference = timestamps[i] - timestamps[i - 1]
                     else:
                         difference = None
                     fpath = self.path(sensorpath, chunkfiles[i])
-                    print("{} - {} - {}".format(timestamps[i], difference, dates[i]))
+                    if not quiet:
+                        print(
+                            "{} - {} - {}".format(timestamps[i], difference, dates[i])
+                        )
                     try:
                         stat = self.__verify_chunk_content(
                             fpath,
                             dtype=dtype,
-                            print_summary_stats=print_per_chunk_data,
+                            print_summary_stats=print_per_chunk_data and not quiet,
                         )
-                        total_data += stat["rows_used"]
+                        sensor_total += stat["rows_used"]
                     except ValueError as e:
                         logger.error(f"Corrupt chunk: {fpath} -- {e}")
                         corrupt.append((fpath, str(e), difference, dates[i]))
-                print()
-                print(f"Summary for db_name={db_name} sensor={sensor}")
-                print(f"Number of chunks: {len(chunkfiles)}")
-                print(f"Number of used rows: {total_data}")
-                print()
+                total_data += sensor_total
+                if not quiet:
+                    print()
+                    print(f"Summary for db_name={db_name} sensor={sensor}")
+                    print(f"Number of chunks: {len(chunkfiles)}")
+                    print(f"Number of used rows: {sensor_total}")
+                    print()
         if corrupt:
             print(f"\n=== Found {len(corrupt)} corrupt chunk(s) ===")
             for fpath, msg, diff, date in corrupt:

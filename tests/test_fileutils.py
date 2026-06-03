@@ -161,6 +161,54 @@ def test_verify_all_chunks_empty_db(tmp_path, fu):
     assert fu.verify_all_chunks(print_per_chunk_data=False) == []
 
 
+def test_verify_all_chunks_quiet_suppresses_per_chunk_output(tmp_path, fu, capsys):
+    """quiet=True must suppress the per-chunk and per-sensor summary output.
+    The corrupt-chunk report at the end is still printed.
+    """
+    sensor1 = tmp_path / "db" / "s1"
+    sensor1.mkdir(parents=True)
+    (sensor1 / "CONFIG.JSON").write_text("{}")
+    _make_chunk(str(sensor1 / "0.5"), n_cols=5)
+    _make_chunk(str(sensor1 / "131072.5"), n_cols=5)
+    # One corrupt chunk
+    raw = np.zeros((CHUNK_ROWS, 5), dtype=DTYPE).tobytes()
+    with open(sensor1 / "262144.5", "wb") as f:
+        f.write(raw[: len(raw) - 4 * DTYPE_ITEMSIZE])
+
+    # Verbose (default): expect the timestamp line, the pprint stat, and the summary
+    fu.verify_all_chunks(print_per_chunk_data=False)
+    verbose = capsys.readouterr().out
+    assert "0.0" in verbose  # timestamp of the first chunk
+    assert "Summary for" in verbose
+    assert "Number of chunks" in verbose
+    assert "Found 1 corrupt chunk" in verbose
+
+    # Quiet: only the corrupt-chunk report
+    capsys.readouterr()  # clear
+    corrupt = fu.verify_all_chunks(print_per_chunk_data=False, quiet=True)
+    quiet_out = capsys.readouterr().out
+    assert "0.0" not in quiet_out, "quiet mode should not print timestamps"
+    assert "Summary for" not in quiet_out, "quiet mode should not print summary"
+    assert "Number of chunks" not in quiet_out, "quiet mode should not print count"
+    assert "Found 1 corrupt chunk" in quiet_out
+    # The corrupt list is still returned
+    assert len(corrupt) == 1
+    assert corrupt[0][0].endswith("262144.5")
+
+
+def test_verify_all_chunks_quiet_clean_db(tmp_path, fu, capsys):
+    """Quiet mode on a clean DB must produce no output at all."""
+    sensor1 = tmp_path / "db" / "s1"
+    sensor1.mkdir(parents=True)
+    (sensor1 / "CONFIG.JSON").write_text("{}")
+    _make_chunk(str(sensor1 / "0.5"), n_cols=5)
+
+    corrupt = fu.verify_all_chunks(quiet=True)
+    out = capsys.readouterr().out
+    assert corrupt == []
+    assert out == ""
+
+
 def test_atomic_write_creates_final_file(tmp_path, fu):
     path = str(tmp_path / "atomic.bin")
     with fu.safe_createfile(path, "wb") as f:
