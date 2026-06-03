@@ -530,13 +530,173 @@ class FileUtils(object):
             f"({bytes_expected - bytes_actual} bytes). Likely a truncated write."
         )
 
+    def fast_read_np_partial(self, filename, dtype=DTYPE):
+        """Reads a chunk file even if it is truncated, returning only the
+        complete rows that fit in the available bytes.
+
+        Trailing bytes that do not complete a full row are silently
+        discarded (this is the desired behaviour for repairing truncated
+        chunks: the partial row at the cut point cannot be trusted and
+        should be re-derived or dropped).
+
+        Returns:
+            (arr, n_rows, n_cols) where arr is a numpy array of shape
+            (n_rows, n_cols). Returns (None, 0, 0) if the file does not
+            exist or cannot be read.
+        """
+        if not os.path.isfile(filename):
+            return None, 0, 0
+        try:
+            n_cols = _get_chunkcolumns(filename)
+        except ValueError:
+            return None, 0, 0
+        itemsize = np.dtype(dtype).itemsize
+        open_func = self.get_open_func(filename)
+        try:
+            with open_func(filename, "rb") as f:
+                buff = f.read()
+        except (OSError, gzip.BadGzipFile, EOFError):
+            return None, 0, 0
+
+        row_size = n_cols * itemsize
+        if row_size <= 0:
+            return None, 0, 0
+        n_rows = len(buff) // row_size
+        if n_rows == 0:
+            return np.empty((0, n_cols), dtype=dtype), 0, n_cols
+        complete_bytes = n_rows * row_size
+        arr = np.frombuffer(buff[:complete_bytes], dtype=dtype)
+        arr.shape = (n_rows, n_cols)
+        return arr, n_rows, n_cols
+
+    def repair_corrupt_chunks(
+        self,
+        corrupt_list,
+        backup=True,
+        dry_run=False,
+        checksum_atol=1e-3,
+    ):
+        """Attempts to repair truncated chunks by reading the complete
+        rows, verifying their checksums, and extending the file with
+        NaN-filled rows up to CHUNK_ROWS.
+
+        For each chunk in `corrupt_list` (a tuple whose first element
+        is the filepath, as returned by `verify_all_chunks`):
+
+          1. Reads the complete rows with `fast_read_np_partial` (the
+             trailing partial row, if any, is discarded).
+          2. If any of the recovered rows contain data (position > 0),
+             validates that the stored checksum (last column) matches
+             `nansum(metric_columns)`. If the check fails, the file is
+             left untouched and the result is `skipped_checksum`.
+          3. If checksums are OK (or there are no data rows to
+             validate), the file is rewritten with shape
+             (CHUNK_ROWS, n_cols) where the recovered rows are copied
+             at the top and the remaining rows are NaN.
+          4. If `backup=True`, the original file is renamed to
+             `<file>.corrupt.bak` before the new file is written.
+          5. The write goes through `safe_createfile`, which uses
+             `<file>.tmp.<pid>.<id>` + `os.replace` for atomicity.
+
+        Args:
+            corrupt_list: iterable of tuples from `verify_all_chunks`.
+            backup: if True, keep the original file at `<file>.corrupt.bak`.
+            dry_run: if True, do not write anything; just report.
+            checksum_atol: tolerance passed to `np.isclose` when
+                validating checksums of recovered data rows.
+
+        Returns:
+            list of (filepath, status, detail) with status in
+            {"repaired", "would_repair", "skipped_checksum",
+             "skipped_unreadable"}.
+        """
+        results = []
+        for entry in corrupt_list:
+            fpath = entry[0]
+            arr, n_rows, n_cols = self.fast_read_np_partial(fpath)
+            if arr is None:
+                results.append((fpath, "skipped_unreadable", "could not read file"))
+                continue
+
+            # Validate checksums of any data rows (position > 0). NaN-only
+            # rows are skipped -- they are the natural state of unwritten
+            # rows in a chunk and the checksum of a NaN row is also NaN,
+            # which would always fail the isclose check.
+            data_mask = arr[:, 0] > 0
+            if data_mask.any():
+                v = arr[data_mask, 1:-1]
+                expected = np.ma.masked_array(v, np.isnan(v)).sum(axis=1)
+                actual = arr[data_mask, -1]
+                if not np.isclose(expected, actual, atol=checksum_atol).all():
+                    bad_idx = np.where(
+                        ~np.isclose(expected, actual, atol=checksum_atol)
+                    )[0]
+                    results.append(
+                        (
+                            fpath,
+                            "skipped_checksum",
+                            f"{len(bad_idx)} data row(s) have invalid checksum",
+                        )
+                    )
+                    continue
+
+            missing = CHUNK_ROWS - n_rows
+            if dry_run:
+                results.append(
+                    (
+                        fpath,
+                        "would_repair",
+                        f"would keep {n_rows} row(s), add {missing} NaN row(s)",
+                    )
+                )
+                continue
+
+            # Build the full chunk: recovered rows at the top, NaN padding
+            full = np.full((CHUNK_ROWS, n_cols), np.nan, dtype=DTYPE)
+            if n_rows > 0:
+                full[:n_rows] = arr
+
+            if backup:
+                backup_path = fpath + ".corrupt.bak"
+                if os.path.exists(backup_path):
+                    # Don't clobber a previous backup by accident; remove
+                    # the older one explicitly so the chain is recoverable.
+                    os.remove(backup_path)
+                os.rename(fpath, backup_path)
+
+            # Atomic write
+            try:
+                with self.safe_createfile(fpath, "wb") as f:
+                    f.write(full.tobytes())
+            except Exception as e:
+                # Try to restore the backup so the user is not left
+                # without their data.
+                if backup and os.path.exists(backup_path):
+                    try:
+                        if os.path.exists(fpath):
+                            os.remove(fpath)
+                        os.rename(backup_path, fpath)
+                    except OSError:
+                        pass
+                results.append((fpath, "skipped_unreadable", f"write failed: {e}"))
+                continue
+
+            results.append(
+                (
+                    fpath,
+                    "repaired",
+                    f"kept {n_rows} row(s), padded {missing} NaN row(s)",
+                )
+            )
+        return results
+
 
 if __name__ == "__main__":
     # FU = FileUtils(".")
     # FILENAME = os.path.join(os.path.abspath(os.curdir),
     #                         "ejemplo.txt")
     # with FU.safe_createfile(FILENAME, "w") as f:
-    #     f.write("hola")
+    #         f.write("hola")
     # print("File {} created".format(FILENAME))
     FU = FileUtils()
     FU.verify_all_chunks(dtype=np.float32)

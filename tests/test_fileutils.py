@@ -340,3 +340,257 @@ def test_atomic_write_cleans_stale_tmp(tmp_path, fu):
     assert open(path, "rb").read() == b"fresh"
     # The stale file is gone
     assert not os.path.isfile(stale)
+
+
+# -----------------------------------------------------------------------
+# fast_read_np_partial
+# -----------------------------------------------------------------------
+
+
+def test_fast_read_np_partial_full_file(tmp_path, fu):
+    path = str(tmp_path / "0.5")
+    arr_expected = _make_chunk(path, n_cols=5)
+    arr, n_rows, n_cols = fu.fast_read_np_partial(path)
+    assert n_rows == CHUNK_ROWS
+    assert n_cols == 5
+    assert arr.shape == (CHUNK_ROWS, 5)
+    np.testing.assert_array_equal(arr, arr_expected)
+
+
+def test_fast_read_np_partial_truncated(tmp_path, fu):
+    path = str(tmp_path / "0.6")
+    full = np.full((CHUNK_ROWS, 6), 0.0, dtype=DTYPE)
+    # Write 13312 rows of data + 4 extra bytes (one byte into the next row)
+    full[:13312] = np.ones((13312, 6), dtype=DTYPE)
+    # Only the first 13312 rows + a few trailing bytes (a partial row)
+    raw = full[:13312].tobytes() + b"\x00\x00\x00\x00"
+    with open(path, "wb") as f:
+        f.write(raw)
+    arr, n_rows, n_cols = fu.fast_read_np_partial(path)
+    assert n_rows == 13312
+    assert n_cols == 6
+    assert arr.shape == (13312, 6)
+    # The recovered rows are the 13312 data rows
+    np.testing.assert_array_equal(arr, full[:13312])
+
+
+def test_fast_read_np_partial_empty_file(tmp_path, fu):
+    path = str(tmp_path / "0.5")
+    open(path, "wb").close()
+    arr, n_rows, n_cols = fu.fast_read_np_partial(path)
+    assert arr.shape == (0, 5)
+    assert n_rows == 0
+    assert n_cols == 5
+
+
+def test_fast_read_np_partial_missing_file(tmp_path, fu):
+    arr, n_rows, n_cols = fu.fast_read_np_partial(str(tmp_path / "missing.5"))
+    assert arr is None
+    assert n_rows == 0
+    assert n_cols == 0
+
+
+# -----------------------------------------------------------------------
+# repair_corrupt_chunks
+# -----------------------------------------------------------------------
+
+
+def _make_chunk_with_data(path, n_cols, n_data_rows, fill=0.0):
+    """Create a chunk with `n_data_rows` rows of data (with valid checksums)
+    and the rest as NaN. The data row at position i has:
+        col 0: i + 1  (1-based position)
+        cols 1:-1: (i + 1) * 1.0  for each metric
+        col -1: sum of metric values = n_metrics * (i + 1)
+    """
+    n_metrics = n_cols - 2
+    arr = np.full((CHUNK_ROWS, n_cols), np.nan, dtype=DTYPE)
+    for i in range(n_data_rows):
+        arr[i, 0] = i + 1
+        arr[i, 1:-1] = fill + (i + 1) * 1.0
+        arr[i, -1] = n_metrics * (fill + (i + 1) * 1.0)
+    with open(path, "wb") as f:
+        f.write(arr.tobytes())
+    return arr
+
+
+def test_repair_truncated_chunk_keeps_valid_rows_and_pads_nan(tmp_path, fu):
+    """Truncate a chunk to 13312 rows, repair, verify the result."""
+    path = str(tmp_path / "0.6")
+    full = _make_chunk_with_data(path, n_cols=6, n_data_rows=CHUNK_ROWS)
+    # Truncate: keep only the first 13312 rows
+    raw = open(path, "rb").read()
+    truncated_bytes = raw[: 13312 * 6 * DTYPE_ITEMSIZE]
+    # Add 4 trailing bytes (partial row) to simulate a real-world truncation
+    with open(path, "wb") as f:
+        f.write(truncated_bytes + b"\x00\x00\x00\x00")
+
+    # Sanity: fast_read_np raises
+    with pytest.raises(ValueError, match="Corrupt chunk"):
+        fu.fast_read_np(path)
+
+    # Repair
+    results = fu.repair_corrupt_chunks([(path, "truncated", None, None)])
+    assert len(results) == 1
+    fpath, status, detail = results[0]
+    assert status == "repaired"
+    assert "13312" in detail
+    assert fpath == path
+
+    # The repaired file is now a valid full chunk
+    arr = fu.fast_read_np(path)
+    assert arr.shape == (CHUNK_ROWS, 6)
+    # First 13312 rows are preserved exactly
+    np.testing.assert_array_equal(arr[:13312], full[:13312])
+    # Last 3072 rows are NaN
+    assert np.isnan(arr[13312:]).all()
+
+
+def test_repair_refuses_to_fix_when_checksum_mismatch(tmp_path, fu):
+    """If a data row's checksum is wrong, the file must NOT be modified."""
+    path = str(tmp_path / "0.6")
+    _make_chunk_with_data(path, n_cols=6, n_data_rows=CHUNK_ROWS)
+    # Truncate
+    raw = open(path, "rb").read()
+    truncated_bytes = raw[: 13312 * 6 * DTYPE_ITEMSIZE]
+    with open(path, "wb") as f:
+        f.write(truncated_bytes)
+
+    # Corrupt one data row's metric (so its checksum no longer matches).
+    # np.frombuffer returns a read-only view, so we make a writable copy.
+    truncated_arr = np.frombuffer(truncated_bytes, dtype=DTYPE).copy().reshape(13312, 6)
+    truncated_arr[100, 1] = 999.0  # change a metric value without updating checksum
+    corrupted_bytes = truncated_arr.tobytes()
+    with open(path, "wb") as f:
+        f.write(corrupted_bytes)
+
+    # Repair should refuse
+    results = fu.repair_corrupt_chunks([(path, "truncated", None, None)])
+    assert len(results) == 1
+    fpath, status, detail = results[0]
+    assert status == "skipped_checksum"
+    assert "invalid checksum" in detail
+
+    # The file is untouched
+    assert open(path, "rb").read() == corrupted_bytes
+    # No backup was created
+    assert not os.path.exists(path + ".corrupt.bak")
+
+
+def test_repair_empty_file_creates_all_nan(tmp_path, fu):
+    """An empty (0-row) file is repaired to a full NaN chunk."""
+    path = str(tmp_path / "0.5")
+    open(path, "wb").close()
+
+    results = fu.repair_corrupt_chunks([(path, "truncated", None, None)])
+    assert len(results) == 1
+    fpath, status, detail = results[0]
+    assert status == "repaired"
+    assert "0 row" in detail
+    assert "16384" in detail
+
+    # The repaired file is a full chunk of NaN
+    arr = fu.fast_read_np(path)
+    assert arr.shape == (CHUNK_ROWS, 5)
+    assert np.isnan(arr).all()
+
+
+def test_repair_dry_run_does_not_write(tmp_path, fu):
+    path = str(tmp_path / "0.6")
+    _make_chunk_with_data(path, n_cols=6, n_data_rows=CHUNK_ROWS)
+    raw = open(path, "rb").read()
+    truncated_bytes = raw[: 13312 * 6 * DTYPE_ITEMSIZE]
+    with open(path, "wb") as f:
+        f.write(truncated_bytes)
+    size_before = os.path.getsize(path)
+
+    results = fu.repair_corrupt_chunks([(path, "truncated", None, None)], dry_run=True)
+    assert results[0][1] == "would_repair"
+
+    # File is untouched
+    assert os.path.getsize(path) == size_before
+    assert not os.path.exists(path + ".corrupt.bak")
+
+
+def test_repair_no_backup_removes_original(tmp_path, fu):
+    path = str(tmp_path / "0.6")
+    _make_chunk_with_data(path, n_cols=6, n_data_rows=CHUNK_ROWS)
+    raw = open(path, "rb").read()
+    truncated_bytes = raw[: 13312 * 6 * DTYPE_ITEMSIZE]
+    with open(path, "wb") as f:
+        f.write(truncated_bytes)
+
+    results = fu.repair_corrupt_chunks([(path, "truncated", None, None)], backup=False)
+    assert results[0][1] == "repaired"
+
+    # The repaired file exists; no backup
+    assert os.path.isfile(path)
+    assert not os.path.exists(path + ".corrupt.bak")
+
+
+def test_repair_integration_with_verify(tmp_path, fu):
+    """End-to-end: scan, repair, re-verify -> no corrupt chunks remain."""
+    # Create a sensor with 2 valid + 2 corrupt chunks
+    sensor1 = tmp_path / "db" / "s1"
+    sensor1.mkdir(parents=True)
+    (sensor1 / "CONFIG.JSON").write_text("{}")
+    _make_chunk_with_data(str(sensor1 / "0.5"), n_cols=5, n_data_rows=CHUNK_ROWS)
+    _make_chunk_with_data(str(sensor1 / "131072.5"), n_cols=5, n_data_rows=CHUNK_ROWS)
+    # Corrupt chunks
+    for cf, n_data in [
+        ("262144.5", CHUNK_ROWS),
+        ("393216.5", CHUNK_ROWS),
+    ]:
+        full = _make_chunk_with_data(str(sensor1 / cf), n_cols=5, n_data_rows=n_data)
+        raw = open(str(sensor1 / cf), "rb").read()
+        truncated = raw[: 13312 * 5 * DTYPE_ITEMSIZE]
+        with open(str(sensor1 / cf), "wb") as f:
+            f.write(truncated)
+
+    # Scan
+    corrupt = fu.verify_all_chunks(quiet=True)
+    assert len(corrupt) == 2
+
+    # Repair
+    results = fu.repair_corrupt_chunks(corrupt)
+    assert all(r[1] == "repaired" for r in results)
+
+    # Re-verify
+    still_corrupt = fu.verify_all_chunks(quiet=True)
+    assert still_corrupt == []
+
+
+def test_repair_mixed_data_and_nan_rows(tmp_path, fu):
+    """Chunk with a mix of data rows and NaN rows: the NaN rows are
+    preserved as NaN, the data rows keep their valid checksums.
+    """
+    path = str(tmp_path / "0.5")
+    full = _make_chunk_with_data(path, n_cols=5, n_data_rows=100)
+    # Rows 100..CHUNK_ROWS are NaN
+    raw = open(path, "rb").read()
+    truncated = raw[: 1000 * 5 * DTYPE_ITEMSIZE]  # 1000 rows total
+    with open(path, "wb") as f:
+        f.write(truncated)
+
+    results = fu.repair_corrupt_chunks([(path, "truncated", None, None)])
+    assert results[0][1] == "repaired"
+
+    arr = fu.fast_read_np(path)
+    assert arr.shape == (CHUNK_ROWS, 5)
+    # First 100 rows are the original data
+    np.testing.assert_array_equal(arr[:100], full[:100])
+    # Rows 100-999: data positions (100..999) -> original data? No,
+    # because _make_chunk_with_data only filled 0..99 with data.
+    # Rows 100..999 in the truncated file were NaN.
+    assert np.isnan(arr[100:1000]).all()
+    # Rows 1000..CHUNK_ROWS: NaN (the new padding)
+    assert np.isnan(arr[1000:]).all()
+
+
+def test_repair_skips_unreadable_file(tmp_path, fu):
+    """A file that cannot be read at all is reported as unreadable."""
+    # Empty corrupt_list returns []
+    results = fu.repair_corrupt_chunks([])
+    assert results == []
+    # Non-existent file
+    results = fu.repair_corrupt_chunks([(str(tmp_path / "missing.5"), "", None, None)])
+    assert results[0][1] == "skipped_unreadable"
