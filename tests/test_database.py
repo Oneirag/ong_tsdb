@@ -2,6 +2,7 @@
 
 import threading
 import time
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -258,3 +259,61 @@ def test_add_new_metrics_uses_per_sensor_lock(db):
 
     metrics = db.get_metrics(READ, "test", "s1", force_reload=True)
     assert "m3" in metrics
+
+
+def test_admin_key_not_in_logs(tmp_path, caplog):
+    """E1: the auto-generated admin key must NOT appear in the log
+    stream. It is printed to stdout as a one-time banner, but a
+    capture of the log handlers (e.g. the default FileHandler) must
+    not contain it.
+    """
+    import logging
+
+    caplog.set_level(logging.INFO)
+    # Bootstrap a fresh DB
+    d = OngTSDB(path=str(tmp_path))
+    with open(d.FU.path_config()) as f:
+        admin = f.readline().strip()
+    assert len(admin) >= 8  # sanity
+    # The key must not appear in any log record
+    assert admin not in caplog.text
+    # The path to the config file IS logged (so it is recoverable)
+    assert "DB correctly setup" in caplog.text
+
+
+def test_check_auth_message_includes_action_name(db):
+    """E6: the NotAuthorizedException raised by _check_auth must
+    include the action name and the (db/sensor) target, so the
+    user can tell at a glance which call failed and why.
+    """
+    from ong_tsdb.exceptions import NotAuthorizedException
+
+    # Use a wrong key: db is configured for WRITE/READ keys; we send
+    # neither, so the auth check must fail.
+    with pytest.raises(NotAuthorizedException) as exc:
+        db.write_tick_numpy(
+            "definitely-not-the-write-key",
+            "test",
+            "s1",
+            np.array([[1.0, 2.0]], dtype=DTYPE),
+            np_timestamps=np.array([_now() + 1], dtype=np.float64),
+        )
+    msg = str(exc.value)
+    assert "WRITE" in msg
+    assert "test/s1" in msg
+
+
+def test_parse_fill_value_warns_on_non_numeric():
+    """E5: parse_fill_value must log a warning (not stay silent) when
+    the input is not numeric. The default behaviour (return 0) is
+    preserved.
+    """
+    from ong_tsdb.server import parse_fill_value
+
+    with patch("ong_tsdb.server.logger") as mock_logger:
+        result = parse_fill_value("not-a-number")
+    assert result == 0
+    mock_logger.warning.assert_called_once()
+    # The warning must mention the bad value so the user can find the caller
+    args = mock_logger.warning.call_args[0]
+    assert "not-a-number" in args

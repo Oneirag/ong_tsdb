@@ -140,20 +140,25 @@ class OngTsdbClient:
         retval = None
         try:
             retval = self.http.request(method, url, *args, **kwargs)
-            # retval = self.http.urlopen(method, url, *args, **kwargs)
-        except OngTsdbClientBaseException as e:
-            logger.exception(e)
-            return None
+        except OngTsdbClientBaseException:
+            # Application-level errors (auth, 404, etc.) propagate so
+            # callers like exist_db can distinguish "not found" from
+            # other failures.
+            raise
         except (ConnectionError, MaxRetryError, TimeoutError):
             logger.error(f"Cannot connect to {url}")
             raise ServerDownException(
                 f"Cannot connect to server in address={url}, check if server is running or server"
                 f" url={self.server_url} used in constructor is correct and includes port "
             )
-        except Exception as e:
-            logger.exception(e)
-            logger.exception(f"Error reading {url}. Maybe server is down")
-            return None
+        except Exception:
+            # Truly unexpected (e.g. malformed URL, urllib3 bug): log and
+            # propagate so the caller can decide. We no longer swallow
+            # these into None, which used to make exist_db / exist_sensor
+            # / delete_db / delete_sensor silently return False on any
+            # error.
+            logger.exception(f"Unexpected error reading {url}")
+            raise
         # Check retval
         if retval:
             if retval.status == 401:
@@ -218,11 +223,15 @@ class OngTsdbClient:
         return success
 
     def exist_db(self, database: str) -> bool:
-        """Returns True if database exists"""
+        """Returns True if database exists.
+
+        Other errors (auth, network, ...) are propagated so the caller
+        can distinguish "not found" from "could not determine".
+        """
         try:
-            res = self._request("get", self._make_url(f"/db/{database}"))
+            self._request("get", self._make_url(f"/db/{database}"))
             return True
-        except Exception:
+        except WrongAddressException:
             return False
 
     def create_db(self, database) -> bool:
@@ -230,21 +239,22 @@ class OngTsdbClient:
         return self._post(self._make_url("/db/") + database)
 
     def delete_db(self, database: str) -> bool:
-        """Returns True if database could be deleted"""
+        """Returns True if database could be deleted.
+
+        Other errors (auth, network, ...) are propagated.
+        """
         try:
-            res = self._request("delete", self._make_url(f"/db/{database}"))
+            self._request("delete", self._make_url(f"/db/{database}"))
             return True
-        except Exception:
+        except WrongAddressException:
             return False
 
     def exist_sensor(self, database: str, sensor: str) -> bool:
-        """Returns True if sensor exists"""
+        """Returns True if sensor exists. Other errors propagate."""
         try:
-            res = self._request(
-                "get", self._make_url(f"/db/{database}/sensor/{sensor}")
-            )
+            self._request("get", self._make_url(f"/db/{database}/sensor/{sensor}"))
             return True
-        except Exception:
+        except WrongAddressException:
             return False
 
     def create_sensor(
@@ -291,13 +301,11 @@ class OngTsdbClient:
         )
 
     def delete_sensor(self, database: str, sensor: str) -> bool:
-        """Returns True if sensor could be deleted"""
+        """Returns True if sensor could be deleted. Other errors propagate."""
         try:
-            res = self._request(
-                "delete", self._make_url(f"/db/{database}/sensor/{sensor}")
-            )
+            self._request("delete", self._make_url(f"/db/{database}/sensor/{sensor}"))
             return True
-        except Exception:
+        except WrongAddressException:
             return False
 
     def write(self, sequence: list, fill_value=0) -> bool:

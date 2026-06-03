@@ -6,7 +6,6 @@ Class to manage file storage (under BASE_DIR directory)
 
 import enum
 import hashlib
-import inspect
 import os
 import random
 import shutil
@@ -146,8 +145,11 @@ class OngTSDB(object):
                 self._sensor_locks[key] = lock
         return lock
 
-    def _check_auth(self, key, action, db, sensor):
-        """Checks if key is valid for the action in sensor. Raises exception otherwise"""
+    def _check_auth(self, key, action: "Actions", db, sensor):
+        """Checks if key is valid for the action in sensor. Raises
+        NotAuthorizedException otherwise. The exception message includes
+        the action name and target (db/sensor) for easier debugging.
+        """
         if key == self.admin_key:
             return  # admin key is valid for any action
         if action != Actions.CREATE:
@@ -160,9 +162,8 @@ class OngTSDB(object):
         time.sleep(
             random.random() * 0.01
         )  # This random prevents performing time attacks
-        raise NotAuthorizedException(
-            "Invalid key for function " + inspect.stack()[1][3]
-        )
+        target = f"{db}/{sensor}" if sensor else (db or "<global>")
+        raise NotAuthorizedException(f"Invalid key for {action.name} on {target}")
 
     def exist_db(self, key, db):
         """True id db exists"""
