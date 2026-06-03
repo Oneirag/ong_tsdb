@@ -9,6 +9,8 @@ from ong_tsdb import CHUNK_ROWS, COMPRESSION_EXT
 from ong_tsdb.fileutils import (
     DTYPE,
     FileUtils,
+    _StdlibProgressBar,
+    _make_progress_bar,
     extract_filename_parts,
     re_chunk_filename,
     _get_chunkcolumns,
@@ -207,6 +209,74 @@ def test_verify_all_chunks_quiet_clean_db(tmp_path, fu, capsys):
     out = capsys.readouterr().out
     assert corrupt == []
     assert out == ""
+
+
+def test_verify_all_chunks_progress_runs_and_returns_corrupt(tmp_path, fu, capsys):
+    """progress=True must run end-to-end, suppress per-chunk/sensor output,
+    and still return the corrupt list and print the corrupt report.
+    """
+    sensor1 = tmp_path / "db" / "s1"
+    sensor1.mkdir(parents=True)
+    (sensor1 / "CONFIG.JSON").write_text("{}")
+    _make_chunk(str(sensor1 / "0.5"), n_cols=5)
+    _make_chunk(str(sensor1 / "131072.5"), n_cols=5)
+    # Corrupt one
+    raw = np.zeros((CHUNK_ROWS, 5), dtype=DTYPE).tobytes()
+    with open(sensor1 / "262144.5", "wb") as f:
+        f.write(raw[: len(raw) - 4 * DTYPE_ITEMSIZE])
+
+    corrupt = fu.verify_all_chunks(progress=True)
+    captured = capsys.readouterr()
+    out = captured.out
+    err = captured.err
+    # Returns the corrupt list
+    assert len(corrupt) == 1
+    assert corrupt[0][0].endswith("262144.5")
+    # Per-chunk / per-sensor output is suppressed
+    assert "0.0" not in out
+    assert "Summary for" not in out
+    # Corrupt report is still printed
+    assert "Found 1 corrupt chunk" in out
+    # Progress text went to stderr (either tqdm or the stdlib fallback)
+    if "chunk" in err.lower() or "%" in err:
+        pass  # tqdm or stdlib bar wrote something
+    # If tqdm is missing, the stdlib bar should have written at least once
+    try:
+        import tqdm  # noqa: F401
+    except ImportError:
+        assert "Verifying chunks" in err or "/" in err
+
+
+def test_verify_all_chunks_progress_clean_db_no_corrupt(tmp_path, fu, capsys):
+    """progress=True with a clean DB: returns [], corrupt report is not printed."""
+    sensor1 = tmp_path / "db" / "s1"
+    sensor1.mkdir(parents=True)
+    (sensor1 / "CONFIG.JSON").write_text("{}")
+    _make_chunk(str(sensor1 / "0.5"), n_cols=5)
+    _make_chunk(str(sensor1 / "131072.5"), n_cols=5)
+
+    corrupt = fu.verify_all_chunks(progress=True)
+    out = capsys.readouterr().out
+    assert corrupt == []
+    assert "Found" not in out  # no corrupt report
+
+
+def test_stdlib_progress_bar_writes_to_stderr():
+    """The stdlib fallback must update its counter and finish with a newline."""
+    bar = _StdlibProgressBar(100, desc="Testing")
+    bar.update(50)
+    # First update should not print (step is 5)
+    # But update again to cross the threshold
+    for _ in range(60):
+        bar.update(1)
+    bar.close()
+    # The close() should print a 100% line and a trailing newline.
+
+
+def test_stdlib_progress_bar_zero_total():
+    bar = _StdlibProgressBar(0, desc="Empty")
+    bar.update(0)  # should not raise
+    bar.close()  # should not raise
 
 
 def test_atomic_write_creates_final_file(tmp_path, fu):

@@ -6,6 +6,7 @@ Created on Wed Jan  4 00:48:46 2017
 @author: ongpi
 """
 
+import sys
 import time
 import os
 from pathlib import Path
@@ -20,6 +21,73 @@ import stat
 import numpy as np
 from ong_tsdb import config, BASE_DIR, COMPRESSION_EXT, logger, DTYPE, CHUNK_ROWS
 from pprint import pprint
+
+
+class _StdlibProgressBar:
+    """Minimal stderr-based progress bar, used only when tqdm is not
+    installed. API mirrors the subset of tqdm we need: `update(n)` and
+    `close()`.
+    """
+
+    def __init__(self, total, desc="Verifying chunks"):
+        self.total = total
+        self.desc = desc
+        self.count = 0
+        self._last_print = 0
+        self._step = max(total // 20, 1) if total else 1
+        self._closed = False
+
+    def update(self, n=1):
+        if self._closed:
+            return
+        self.count += n
+        if self.count - self._last_print >= self._step:
+            pct = (100 * self.count / self.total) if self.total else 0
+            print(
+                f"\r{self.desc}: {self.count}/{self.total} ({pct:.0f}%)",
+                end="",
+                file=sys.stderr,
+                flush=True,
+            )
+            self._last_print = self.count
+
+    def close(self):
+        if self._closed or not self.total:
+            return
+        # If update() never reached 100% (e.g. fewer than step), print it.
+        if self.count != self.total:
+            print(
+                f"\r{self.desc}: {self.total}/{self.total} (100%)",
+                end="",
+                file=sys.stderr,
+                flush=True,
+            )
+        # Trailing newline so the next stderr line is not glued to the bar.
+        print(file=sys.stderr, flush=True)
+        self._closed = True
+
+
+def _make_progress_bar(total, desc="Verifying chunks"):
+    """Return a progress bar object with update()/close() API.
+
+    Uses tqdm if available; falls back to a stdlib-only stderr bar.
+    Returns None if total is 0 (nothing to show).
+    """
+    if not total:
+        return None
+    try:
+        from tqdm import tqdm
+
+        return tqdm(
+            total=total,
+            desc=desc,
+            unit="chunk",
+            file=sys.stderr,
+            mininterval=0.2,
+            disable=False,
+        )
+    except ImportError:
+        return _StdlibProgressBar(total, desc)
 
 
 # Regular expression for parsing chunk filenames. Anchored at end (\Z) so that
@@ -281,6 +349,7 @@ class FileUtils(object):
         dtype=DTYPE,
         print_per_chunk_data=True,
         quiet=False,
+        progress=False,
     ):
         """Gives some statistics on the chunks of a certain DB (or all if not db_name).
 
@@ -297,32 +366,83 @@ class FileUtils(object):
                 summary. Only the corrupt-chunk report is printed at the end
                 (if any). The function always returns the corrupt list
                 regardless of this flag.
+            progress : if True, show a progress bar (tqdm if installed, else
+                a stdlib fallback) and suppress per-chunk / per-sensor output.
+                Mutually compatible with quiet: setting progress implies
+                quiet. The corrupt report is always printed at the end.
 
         Returns
             list of tuples (filepath, error_message, prev_diff, date) for each
             corrupt chunk discovered.
         """
-        total_data = 0
-        corrupt = []
+        if progress:
+            quiet = True
+
+        # Phase 1: discover all chunks so we know the total for the progress
+        # bar. We do this in one pass and process in a second so the bar
+        # can show real progress.
+        sensors_chunks = []
         for db_name in self.getdbs():
             if filter_db_name and db_name != filter_db_name:
                 continue
             for sensor in self.getsensors(db_name):
                 sensorpath = self.path(db_name, sensor)
                 chunkfiles = _get_chunkfiles(sensorpath)
+                if not chunkfiles:
+                    continue
                 timestamps = [float(f.split(".")[0]) for f in chunkfiles]
                 dates = [time.asctime(time.gmtime(f)) for f in timestamps]
-                sensor_total = 0
-                for i in range(len(dates)):
-                    if i > 0:
-                        difference = timestamps[i] - timestamps[i - 1]
-                    else:
-                        difference = None
-                    fpath = self.path(sensorpath, chunkfiles[i])
+                chunks = []
+                for i, cf in enumerate(chunkfiles):
+                    diff = timestamps[i] - timestamps[i - 1] if i > 0 else None
+                    chunks.append(
+                        {
+                            "cf": cf,
+                            "diff": diff,
+                            "date": dates[i],
+                            "ts": timestamps[i],
+                        }
+                    )
+                sensors_chunks.append(
+                    {
+                        "db": db_name,
+                        "sensor": sensor,
+                        "sensorpath": sensorpath,
+                        "chunks": chunks,
+                    }
+                )
+
+        total_chunks = sum(len(s["chunks"]) for s in sensors_chunks)
+        bar = _make_progress_bar(total_chunks) if progress else None
+
+        # Phase 2: process all chunks
+        corrupt = []
+        last_sensor = (None, None)
+        sensor_total = 0
+        sensor_count = 0
+        try:
+            for s in sensors_chunks:
+                db_name = s["db"]
+                sensor = s["sensor"]
+                sensorpath = s["sensorpath"]
+                for c in s["chunks"]:
+                    fpath = self.path(sensorpath, c["cf"])
+                    if not quiet and (db_name, sensor) != last_sensor:
+                        if last_sensor != (None, None):
+                            print()
+                            print(
+                                f"Summary for db_name={last_sensor[0]} "
+                                f"sensor={last_sensor[1]}"
+                            )
+                            print(f"Number of chunks: {sensor_count}")
+                            print(f"Number of used rows: {sensor_total}")
+                            print()
+                        print(f"--- {db_name}/{sensor} ---")
+                        last_sensor = (db_name, sensor)
+                        sensor_total = 0
+                        sensor_count = 0
                     if not quiet:
-                        print(
-                            "{} - {} - {}".format(timestamps[i], difference, dates[i])
-                        )
+                        print("{} - {} - {}".format(c["ts"], c["diff"], c["date"]))
                     try:
                         stat = self.__verify_chunk_content(
                             fpath,
@@ -332,14 +452,21 @@ class FileUtils(object):
                         sensor_total += stat["rows_used"]
                     except ValueError as e:
                         logger.error(f"Corrupt chunk: {fpath} -- {e}")
-                        corrupt.append((fpath, str(e), difference, dates[i]))
-                total_data += sensor_total
-                if not quiet:
-                    print()
-                    print(f"Summary for db_name={db_name} sensor={sensor}")
-                    print(f"Number of chunks: {len(chunkfiles)}")
-                    print(f"Number of used rows: {sensor_total}")
-                    print()
+                        corrupt.append((fpath, str(e), c["diff"], c["date"]))
+                    sensor_count += 1
+                    if bar is not None:
+                        bar.update(1)
+        finally:
+            if bar is not None:
+                bar.close()
+
+        if not quiet and last_sensor != (None, None):
+            print()
+            print(f"Summary for db_name={last_sensor[0]} sensor={last_sensor[1]}")
+            print(f"Number of chunks: {sensor_count}")
+            print(f"Number of used rows: {sensor_total}")
+            print()
+
         if corrupt:
             print(f"\n=== Found {len(corrupt)} corrupt chunk(s) ===")
             for fpath, msg, diff, date in corrupt:

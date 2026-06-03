@@ -2,5 +2,9 @@ flask ~= 3.1.1
 gevent ~= 25.5.1
 msgpack ~= 1.1.1
 numpy ~= 2.3.0
-pandas ~= 2.2.3
 ong_utils >= 1.0.6
+pandas ~= 2.2.3
+# Optional: nicer progress bar for `python -m ong_tsdb verify --progress`.
+# Falls back to a stdlib stderr counter if not installed.
+tqdm ~= 4.67.0
+
