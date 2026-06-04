@@ -549,35 +549,3 @@ class OngTsdbClient:
     def __del__(self):
         """Forces http pool manager to be cleared (to avoid warning in unittest)"""
         self.http.clear()
-
-
-if __name__ == "__main__":
-    client = OngTsdbClient(
-        url=config("url"), port=config("port"), token=config("admin_token")
-    )
-    print(client.create_db("ejemplo"))
-    print(
-        client.create_sensor(
-            "ejemplo",
-            "sensor1",
-            "1s",
-            ["active", "reactive"],
-            write_key=config("write_token"),
-            read_key=config("read_token"),
-        )
-    )
-    client = OngTsdbClient(
-        url=config("url"), port=config("port"), token=config("write_token")
-    )
-    while True:
-        ts = time.time_ns()
-        client.write(
-            [
-                f"ejemplo,circuit=sensor1 active=9,reactive=10 {ts}",
-                f"ejemplo,circuit=sensor1 active=11 {ts}",
-                f"ejemplo,circuit=sensor1 reactive=12 {ts}",
-                f"ejemplo,circuit=sensor1 reactive=13,active=14 {ts}",
-                f"ejemplo,circuit=sensor1 reactive=15,active=16,nueva=17 {ts}",
-            ]
-        )
-        time.sleep(1)

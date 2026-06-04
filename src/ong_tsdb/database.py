@@ -740,8 +740,3 @@ class OngTSDB(object):
             return hashlib.md5(open(file_name, "rb").read()).hexdigest()
         else:
             return 0
-
-
-if __name__ == "__main__":
-    db = OngTSDB(BASE_DIR)
-    db.create_db(123, "hola")

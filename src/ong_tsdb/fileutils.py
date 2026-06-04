@@ -689,14 +689,3 @@ class FileUtils(object):
                 )
             )
         return results
-
-
-if __name__ == "__main__":
-    # FU = FileUtils(".")
-    # FILENAME = os.path.join(os.path.abspath(os.curdir),
-    #                         "ejemplo.txt")
-    # with FU.safe_createfile(FILENAME, "w") as f:
-    #         f.write("hola")
-    # print("File {} created".format(FILENAME))
-    FU = FileUtils()
-    FU.verify_all_chunks(dtype=np.float32)
