@@ -4,6 +4,10 @@ msgpack ~= 1.1.1
 numpy ~= 2.3.0
 ong_utils >= 1.0.6
 pandas ~= 2.2.3
+# Required since 0.9.0: new chunk writes use zstd by default. Old
+# gzip chunks are still readable transparently. See
+# examples/benchmark_compression.py for the comparison numbers.
+zstandard ~= 0.25.0
 # Optional: nicer progress bar for `python -m ong_tsdb verify --progress`.
 # Falls back to a stdlib stderr counter if not installed.
 tqdm ~= 4.67.0

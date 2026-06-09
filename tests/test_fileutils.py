@@ -1,3 +1,4 @@
+import gzip
 import os
 import re
 import stat
@@ -5,7 +6,12 @@ import stat
 import numpy as np
 import pytest
 
-from ong_tsdb import CHUNK_ROWS, COMPRESSION_EXT
+from ong_tsdb import (
+    CHUNK_ROWS,
+    COMPRESSION_EXT,
+    COMPRESSION_GZIP,
+    COMPRESSION_ZSTD,
+)
 from ong_tsdb.fileutils import (
     DTYPE,
     FileUtils,
@@ -31,6 +37,15 @@ def _make_chunk(path, n_cols, n_rows=CHUNK_ROWS, fill=0.0):
     with open(path, "wb") as f:
         f.write(arr.tobytes())
     return arr
+
+
+def _gzip_compress_file(path: str) -> None:
+    """Re-write ``path`` in place, gzip-compressing its current bytes.
+    Used by migration tests to simulate a legacy gzip chunk on disk."""
+    with open(path, "rb") as f:
+        raw = f.read()
+    with open(path, "wb") as f:
+        f.write(gzip.compress(raw))
 
 
 DTYPE_ITEMSIZE = np.dtype(DTYPE).itemsize
@@ -594,3 +609,272 @@ def test_repair_skips_unreadable_file(tmp_path, fu):
     # Non-existent file
     results = fu.repair_corrupt_chunks([(str(tmp_path / "missing.5"), "", None, None)])
     assert results[0][1] == "skipped_unreadable"
+
+
+# -----------------------------------------------------------------------
+# Dual-format (gzip + zstd) support
+# -----------------------------------------------------------------------
+
+
+def test_extract_filename_parts_accepts_gzip_and_zstd():
+    """The chunk-name regex must accept both .gz (legacy) and .zst (new)
+    so old chunks keep working after the 0.9.0 default change."""
+    gzip_parts = extract_filename_parts("1234.5.gz")
+    assert gzip_parts["compression"] == ".gz"
+    zstd_parts = extract_filename_parts("1234.5.zst")
+    assert zstd_parts["compression"] == ".zst"
+    raw_parts = extract_filename_parts("1234.5")
+    assert raw_parts["compression"] is None
+
+
+def test_fast_read_np_reads_gzip_legacy_chunk(tmp_path, fu):
+    """A gzip-compressed chunk (the pre-0.9.0 default) must still be
+    readable transparently. fast_read_np auto-detects the codec from
+    the filename extension."""
+    path = str(tmp_path / f"0.5{COMPRESSION_GZIP}")
+    full = _make_chunk(path, n_cols=5)
+    # _make_chunk wrote raw bytes, but the .gz extension requires
+    # actual gzip data. Compress now so the test simulates a real
+    # legacy chunk on disk.
+    raw = full.tobytes()
+    with open(path, "wb") as f:
+        f.write(gzip.compress(raw))
+    arr = fu.fast_read_np(path)
+    assert arr.shape == (CHUNK_ROWS, 5)
+    np.testing.assert_array_equal(arr, full)
+
+
+def test_fast_read_np_reads_zstd_chunk(tmp_path, fu):
+    """A zstd-compressed chunk (the 0.9.0 default for new writes) must
+    be readable and yield the same data as the gzip version."""
+    import zstandard
+
+    path_gz = str(tmp_path / f"0.5{COMPRESSION_GZIP}")
+    full = _make_chunk(path_gz, n_cols=5)
+    raw = full.tobytes()
+    path_zst = str(tmp_path / f"0.5{COMPRESSION_ZSTD}")
+    with open(path_zst, "wb") as f:
+        f.write(zstandard.ZstdCompressor().compress(raw))
+    arr = fu.fast_read_np(path_zst)
+    assert arr.shape == (CHUNK_ROWS, 5)
+    np.testing.assert_array_equal(arr, full)
+
+
+def test_fast_read_np_partial_reads_zstd_chunk(tmp_path, fu):
+    """fast_read_np_partial (used by repair and migrate) must work on
+    truncated zstd-compressed chunks as well as gzip ones."""
+    import zstandard
+
+    full = _make_chunk_with_data(tmp_path / "0.5", n_cols=5, n_data_rows=CHUNK_ROWS)
+    raw = full.tobytes()
+    compressed = zstandard.ZstdCompressor().compress(raw[: 13312 * 5 * 4])  # partial
+    path = str(tmp_path / f"131072.5{COMPRESSION_ZSTD}")
+    with open(path, "wb") as f:
+        f.write(compressed)
+    arr, n_rows, n_cols = fu.fast_read_np_partial(path)
+    assert n_cols == 5
+    assert n_rows == 13312
+    np.testing.assert_array_equal(arr, full[:13312])
+
+
+def test_get_open_func_returns_zstd_stream_reader(tmp_path, fu):
+    path = str(tmp_path / f"0.5{COMPRESSION_ZSTD}")
+    import zstandard
+
+    with open(path, "wb") as f:
+        f.write(zstandard.ZstdCompressor().compress(b"hello world"))
+    open_func = fu.get_open_func(path)
+    with open_func(path, "rb") as f:
+        assert f.read() == b"hello world"
+
+
+# -----------------------------------------------------------------------
+# migrate_compression
+# -----------------------------------------------------------------------
+
+
+def test_migrate_gzip_to_zstd(tmp_path, fu):
+    """A gzip chunk is re-written as a zstd chunk with the same data."""
+    path_gz = str(tmp_path / f"0.5{COMPRESSION_GZIP}")
+    full = _make_chunk_with_data(path_gz, n_cols=5, n_data_rows=CHUNK_ROWS)
+    _gzip_compress_file(path_gz)
+    assert os.path.exists(path_gz)
+
+    results = fu.migrate_compression(
+        [(path_gz, "gz", None, None)], target_ext=COMPRESSION_ZSTD
+    )
+    assert len(results) == 1
+    fpath, status, detail = results[0]
+    assert status == "migrated"
+    assert fpath == path_gz
+    assert ".gz -> .zst" in detail
+
+    # Old file is gone, new one exists
+    assert not os.path.exists(path_gz)
+    path_zst = str(tmp_path / "0.5.zst")
+    assert os.path.exists(path_zst)
+    # Backup exists
+    assert os.path.exists(path_gz + ".bak")
+    # The new file is a valid chunk with the same data
+    arr = fu.fast_read_np(path_zst)
+    np.testing.assert_array_equal(arr, full)
+
+
+def test_migrate_zstd_to_gzip(tmp_path, fu):
+    """Reverse direction also works."""
+    import zstandard
+
+    path_zst = str(tmp_path / f"0.5{COMPRESSION_ZSTD}")
+    full = _make_chunk_with_data(path_zst, n_cols=5, n_data_rows=CHUNK_ROWS)
+    # convert to zstd on disk
+    raw = full.tobytes()
+    with open(path_zst, "wb") as f:
+        f.write(zstandard.ZstdCompressor().compress(raw))
+
+    results = fu.migrate_compression(
+        [(path_zst, "zst", None, None)], target_ext=COMPRESSION_GZIP
+    )
+    assert results[0][1] == "migrated"
+
+    # gzip version exists, zstd backup remains
+    path_gz = str(tmp_path / "0.5.gz")
+    assert os.path.exists(path_gz)
+    assert os.path.exists(path_zst + ".bak")
+    arr = fu.fast_read_np(path_gz)
+    np.testing.assert_array_equal(arr, full)
+
+
+def test_migrate_dry_run_does_not_write(tmp_path, fu):
+    path_gz = str(tmp_path / f"0.5{COMPRESSION_GZIP}")
+    _make_chunk_with_data(path_gz, n_cols=5, n_data_rows=CHUNK_ROWS)
+    _gzip_compress_file(path_gz)
+    size_before = os.path.getsize(path_gz)
+
+    results = fu.migrate_compression(
+        [(path_gz, "gz", None, None)],
+        target_ext=COMPRESSION_ZSTD,
+        dry_run=True,
+    )
+    assert results[0][1] == "would_migrate"
+
+    # File untouched
+    assert os.path.getsize(path_gz) == size_before
+    assert not os.path.exists(str(tmp_path / "0.5.zst"))
+    assert not os.path.exists(path_gz + ".bak")
+
+
+def test_migrate_no_backup_removes_original(tmp_path, fu):
+    path_gz = str(tmp_path / f"0.5{COMPRESSION_GZIP}")
+    _make_chunk_with_data(path_gz, n_cols=5, n_data_rows=CHUNK_ROWS)
+    # Re-gzip in place so the .gz file actually contains gzip data
+    with open(path_gz, "rb") as f:
+        raw = f.read()
+    with open(path_gz, "wb") as f:
+        f.write(gzip.compress(raw))
+
+    results = fu.migrate_compression(
+        [(path_gz, "gz", None, None)],
+        target_ext=COMPRESSION_ZSTD,
+        backup=False,
+    )
+    assert results[0][1] == "migrated"
+
+    # The gzip file is gone, no .bak (backup=False)
+    assert not os.path.exists(path_gz)
+    assert not os.path.exists(path_gz + ".bak")
+    path_zst = str(tmp_path / "0.5.zst")
+    assert os.path.exists(path_zst)
+
+
+def test_migrate_skips_already_in_target_format(tmp_path, fu):
+    """A chunk that is already zstd is left alone when target is zstd."""
+    import zstandard
+
+    path_zst = str(tmp_path / f"0.5{COMPRESSION_ZSTD}")
+    full = _make_chunk_with_data(path_zst, n_cols=5, n_data_rows=CHUNK_ROWS)
+    with open(path_zst, "wb") as f:
+        f.write(zstandard.ZstdCompressor().compress(full.tobytes()))
+    size_before = os.path.getsize(path_zst)
+
+    results = fu.migrate_compression(
+        [(path_zst, "zst", None, None)], target_ext=COMPRESSION_ZSTD
+    )
+    assert results[0][1] == "skipped_already_target"
+    assert os.path.getsize(path_zst) == size_before
+    assert not os.path.exists(path_zst + ".bak")
+
+
+def test_migrate_refuses_to_migrate_bad_checksum(tmp_path, fu):
+    """A chunk with invalid checksums is not migrated (data is not
+    silently destroyed)."""
+    path_gz = str(tmp_path / f"0.5{COMPRESSION_GZIP}")
+    full = _make_chunk_with_data(path_gz, n_cols=5, n_data_rows=CHUNK_ROWS)
+    # Truncate to keep just first 13312 rows, then corrupt one row's metric
+    raw = full.tobytes()[: 13312 * 5 * 4]
+    arr = np.frombuffer(raw, dtype=DTYPE).copy().reshape(13312, 5)
+    arr[100, 1] = 999.0  # data corruption
+    # Re-gzip the corrupted data
+    corrupted = gzip.compress(arr.tobytes())
+    with open(path_gz, "wb") as f:
+        f.write(corrupted)
+
+    results = fu.migrate_compression(
+        [(path_gz, "gz", None, None)], target_ext=COMPRESSION_ZSTD
+    )
+    assert results[0][1] == "skipped_checksum"
+    # gzip file is untouched
+    assert os.path.exists(path_gz)
+    assert not os.path.exists(str(tmp_path / "0.5.zst"))
+
+
+def test_migrate_invalid_target_ext_raises(tmp_path, fu):
+    path = str(tmp_path / "0.5")
+    with pytest.raises(ValueError, match="target_ext must be one of"):
+        fu.migrate_compression([(path, "", None, None)], target_ext=".rar")
+
+
+def test_migrate_integration_with_getchunks(tmp_path, fu):
+    """End-to-end: a directory with a mix of gzip and zstd chunks is
+    fully migrated; verify_all_chunks afterwards returns []."""
+    sensor1 = tmp_path / "db" / "s1"
+    sensor1.mkdir(parents=True)
+    (sensor1 / "CONFIG.JSON").write_text("{}")
+    import zstandard
+
+    def _write_gz_chunk(path_no_ext, n_data):
+        _make_chunk_with_data(path_no_ext, n_cols=5, n_data_rows=n_data)
+        with open(path_no_ext, "rb") as f:
+            raw = f.read()
+        gz_path = path_no_ext + COMPRESSION_GZIP
+        with open(gz_path, "wb") as f:
+            f.write(gzip.compress(raw))
+        os.remove(path_no_ext)
+        return gz_path
+
+    def _write_zst_chunk(path_no_ext, n_data):
+        _make_chunk_with_data(path_no_ext, n_cols=5, n_data_rows=n_data)
+        with open(path_no_ext, "rb") as f:
+            raw = f.read()
+        zst_path = path_no_ext + COMPRESSION_ZSTD
+        with open(zst_path, "wb") as f:
+            f.write(zstandard.ZstdCompressor().compress(raw))
+        os.remove(path_no_ext)
+        return zst_path
+
+    path_a = _write_gz_chunk(str(sensor1 / "0.5"), CHUNK_ROWS)
+    path_b = _write_gz_chunk(str(sensor1 / "131072.5"), CHUNK_ROWS)
+    path_c = _write_zst_chunk(str(sensor1 / "262144.5"), CHUNK_ROWS)
+
+    # Use full paths (this is what the CLI does too) to avoid any
+    # ambiguity about where the file lives.
+    chunks = [fu.path("db", "s1", cf) for cf in fu.getchunks("db", "s1")]
+    assert len(chunks) == 3
+
+    results = fu.migrate_compression(chunks, target_ext=COMPRESSION_ZSTD)
+    statuses = [r[1] for r in results]
+    assert statuses.count("migrated") == 2, f"got {statuses}"
+    assert statuses.count("skipped_already_target") == 1, f"got {statuses}"
+
+    # All chunks are now zstd; verify reports none as corrupt
+    still_corrupt = fu.verify_all_chunks(quiet=True)
+    assert still_corrupt == []
