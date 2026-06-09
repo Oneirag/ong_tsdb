@@ -1,13 +1,20 @@
 """CLI entry point:
 
-python -m ong_tsdb verify [--db NAME] [--corrupt-only] [--progress]
-python -m ong_tsdb repair [--db NAME] [--no-backup] [--dry-run]
+python -m ong_tsdb verify  [--db NAME] [--corrupt-only] [--progress]
+python -m ong_tsdb repair  [--db NAME] [--no-backup] [--dry-run]
+python -m ong_tsdb migrate [--db NAME] [--target zstd|gzip|raw]
+                            [--no-backup] [--force]
 """
 
 import argparse
 import sys
 
-from ong_tsdb import BASE_DIR, logger
+from ong_tsdb import (
+    BASE_DIR,
+    COMPRESSION_GZIP,
+    COMPRESSION_ZSTD,
+    logger,
+)
 from ong_tsdb.fileutils import FileUtils
 
 
@@ -48,6 +55,41 @@ def main():
         help="Show what would be repaired without writing anything",
     )
     p_r.add_argument(
+        "--base-dir", default=BASE_DIR, help="Override BASE_DIR (default: from config)"
+    )
+
+    p_m = sub.add_parser(
+        "migrate",
+        help="Migrate chunks to a different compression format. Default: gzip -> zstd. "
+        "Old chunks keep working (dual-format read). The migration is per-sensor "
+        "and atomic; the source is backed up to <file>.bak unless --no-backup is "
+        "set.",
+    )
+    p_m.add_argument("--db", default=None, help="Filter to a single database")
+    p_m.add_argument(
+        "--target",
+        default=COMPRESSION_ZSTD,
+        choices=[COMPRESSION_ZSTD, COMPRESSION_GZIP, ""],
+        help="Target compression: 'zst' (default), 'gz' or '' (uncompressed)",
+    )
+    p_m.add_argument(
+        "--no-backup",
+        action="store_true",
+        help="Do not keep the original at <file>.bak (faster, no undo)",
+    )
+    p_m.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=True,
+        help="Show what would be migrated without writing anything (default)",
+    )
+    p_m.add_argument(
+        "--force",
+        action="store_true",
+        help="Actually rewrite the chunks. Disables the --dry-run default and "
+        "asks for an interactive confirmation before touching any file.",
+    )
+    p_m.add_argument(
         "--base-dir", default=BASE_DIR, help="Override BASE_DIR (default: from config)"
     )
 
@@ -127,6 +169,89 @@ def main():
         else:
             print(f"=== All {n_repaired} repaired file(s) now pass fast_read_np ===")
             sys.exit(0)
+
+    elif args.cmd == "migrate":
+        # --dry-run is the default; --force disables it and asks for
+        # confirmation so the user has a chance to back out.
+        dry_run = not args.force
+        if not dry_run:
+            confirm = input(
+                f"This will re-write all chunks in {args.target or 'uncompressed'} "
+                f"format. Originals are kept at <file>.bak unless --no-backup. "
+                f"Type 'yes' to continue: "
+            )
+            if confirm.strip().lower() != "yes":
+                print("Aborted.")
+                sys.exit(1)
+
+        fu = FileUtils(base_path=args.base_dir)
+        # Scan every database/sensor and collect all chunks as full
+        # paths (the only way migrate_compression can resolve them
+        # correctly).
+        if args.db:
+            dbs = [args.db]
+        else:
+            dbs = fu.getdbs()
+        all_chunks = []
+        for db_name in dbs:
+            for sensor in fu.getsensors(db_name):
+                all_chunks.extend(
+                    fu.path(db_name, sensor, cf) for cf in fu.getchunks(db_name, sensor)
+                )
+
+        if not all_chunks:
+            print(f"No chunks found in {args.base_dir}.")
+            sys.exit(0)
+
+        if args.dry_run:
+            print(
+                f"Scanning {len(all_chunks)} chunk(s) for migration to "
+                f"{args.target or 'uncompressed'}..."
+            )
+        else:
+            print(
+                f"Migrating {len(all_chunks)} chunk(s) to {args.target or 'uncompressed'}..."
+            )
+
+        results = fu.migrate_compression(
+            chunk_list=all_chunks,
+            target_ext=args.target,
+            backup=not args.no_backup,
+            dry_run=dry_run,
+        )
+        n_migrated = sum(1 for r in results if r[1] == "migrated")
+        n_would = sum(1 for r in results if r[1] == "would_migrate")
+        n_skipped = sum(1 for r in results if r[1] == "skipped_already_target")
+        n_bad = len(results) - n_migrated - n_would - n_skipped
+
+        for fpath, status, detail in results:
+            label = {
+                "migrated": "MIGRATE",
+                "would_migrate": "DRY-RUN",
+                "skipped_already_target": "SKIP   ",
+                "skipped_checksum": "SKIP   ",
+                "skipped_unreadable": "SKIP   ",
+            }.get(status, status.upper())
+            print(f"  {label} {fpath}")
+            print(f"          {detail}")
+
+        print()
+        if dry_run:
+            print(
+                f"Dry run: would migrate {n_would} chunk(s), skip "
+                f"{n_skipped + n_bad} (already in target: {n_skipped}, "
+                f"bad: {n_bad})."
+            )
+            print("Run with --force to actually rewrite the chunks.")
+        else:
+            print(
+                f"Migrated {n_migrated} chunk(s); skipped {n_skipped + n_bad} "
+                f"(already in target: {n_skipped}, bad: {n_bad})."
+            )
+            if n_migrated > 0 and not args.no_backup:
+                print("Originals preserved at <file>.bak")
+            sys.exit(0 if n_bad == 0 else 1)
+        sys.exit(0)
 
 
 if __name__ == "__main__":
