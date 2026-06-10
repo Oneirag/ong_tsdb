@@ -408,7 +408,7 @@ class OngTsdbClient:
             if tz is None:
                 return utc_date
             else:
-                return utc_date.tz_convert("UTC").astimezone(tz)
+                return utc_date.tz_localize("UTC").tz_convert(tz)
 
     def get_metrics(self, db, sensor):
         """Returns list of metrics of a sensor"""
