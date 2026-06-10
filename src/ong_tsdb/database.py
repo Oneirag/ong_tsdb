@@ -333,6 +333,7 @@ class OngTSDB(object):
         Replaces a chunk with a new one (that can be the compressed version or adding additional columns)
         :param db: data base name
         :param sensor: sensor name
+        :param original_chunk_name: name (without path) of the original chunk to replace
         :param new_chunk_name: name (without path) of the new chunk
         :param new_array: array (uncompressed) that will be written. If none, the array in original_chunk will be used
         :param compressed: True if file wil be compressed. Defaults to false
@@ -342,11 +343,15 @@ class OngTSDB(object):
             new_array = self.FU.fast_read_np(
                 self.get_FU_path(db, sensor, original_chunk_name), dtype=DTYPE
             )
-        with self.FU.safe_createfile(
-            self.get_FU_path(db, sensor, new_chunk_name), "wb"
-        ) as f:
+        orig_path = self.get_FU_path(db, sensor, original_chunk_name)
+        new_path = self.get_FU_path(db, sensor, new_chunk_name)
+        if orig_path != new_path:
+            # Remove the original first so a crash never leaves two
+            # files for the same timestamp (which would cause read_iter
+            # to prefer the old stale one).
+            os.remove(orig_path)
+        with self.FU.safe_createfile(new_path, "wb") as f:
             f.write(new_array.tobytes())
-        os.remove(self.get_FU_path(db, sensor, original_chunk_name))
 
     def add_new_metrics(
         self, key: str, db: str, sensor: str, new_metrics: list, fill_value: float = 0
