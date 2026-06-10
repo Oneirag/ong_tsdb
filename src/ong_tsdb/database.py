@@ -3,6 +3,8 @@
 Class to manage file storage (under BASE_DIR directory)
 """
 
+from __future__ import annotations
+
 import enum
 import hashlib
 import hmac
@@ -12,7 +14,7 @@ import shutil
 import string
 import threading
 import time
-from typing import NamedTuple, Optional
+from typing import NamedTuple, Optional, Union, Iterator
 
 import numpy as np
 import pandas as pd
@@ -120,7 +122,9 @@ class OngTSDB(object):
                 sdb[db][sensor] = data
         self.db = sdb
 
-    def __create_internal_structure(self, path, check_list, json_string=None):
+    def __create_internal_structure(
+        self, path: str, check_list: list, json_string: Optional[str] = None
+    ) -> None:
         file_path = self.FU.path_config(path)
         if path not in check_list:
             self.FU.safe_makedirs(path)
@@ -135,7 +139,7 @@ class OngTSDB(object):
                             "Element already exists with different config"
                         )
 
-    def __is_key(self, db, sensor, key_name, key_value) -> bool:
+    def __is_key(self, db: str, sensor: str, key_name: str, key_value: str) -> bool:
         """Checks if key_value correspond to a key_name from a sensor and database"""
         if db not in self.db:
             return False
@@ -163,7 +167,9 @@ class OngTSDB(object):
                 self._sensor_locks[key] = lock
         return lock
 
-    def _check_auth(self, key, action: "Actions", db, sensor):
+    def _check_auth(
+        self, key: str, action: Actions, db: Optional[str], sensor: Optional[str]
+    ) -> None:
         """Checks if key is valid for the action in sensor. Raises
         NotAuthorizedException otherwise. The exception message includes
         the action name and target (db/sensor) for easier debugging.
@@ -180,11 +186,11 @@ class OngTSDB(object):
         target = f"{db}/{sensor}" if sensor else (db or "<global>")
         raise NotAuthorizedException(f"Invalid key for {action.name} on {target}")
 
-    def exist_db(self, key, db):
+    def exist_db(self, key: str, db: str) -> bool:
         """True id db exists"""
         return db in self.db
 
-    def exist_sensor(self, key, db, sensor):
+    def exist_sensor(self, key: str, db: str, sensor: str) -> bool:
         """Checks if a sensor exists in database"""
         if db not in self.db or len(self.db[db].keys()) == 0:
             return (
@@ -199,14 +205,14 @@ class OngTSDB(object):
             return False
         return True
 
-    def create_db(self, admin_key, db):
+    def create_db(self, admin_key: str, db: str) -> None:
         self._check_auth(admin_key, Actions.CREATE, None, None)
         if self.exist_db(admin_key, db):
             raise ElementAlreadyExistsException(f"Database {db} already exists")
         self.__create_internal_structure(self.FU.path(db), self.db.keys())
         self.db[db] = dict()
 
-    def delete_db(self, admin_key, db):
+    def delete_db(self, admin_key: str, db: str) -> bool:
         self._check_auth(admin_key, Actions.CREATE, db, None)
         if self.exist_db(admin_key, db):
             shutil.rmtree(self.FU.path(db))
@@ -216,7 +222,7 @@ class OngTSDB(object):
         else:
             return False
 
-    def delete_sensor(self, admin_key, db, sensor):
+    def delete_sensor(self, admin_key: str, db: str, sensor: str) -> bool:
         self._check_auth(admin_key, Actions.CREATE, db, sensor)
         if self.exist_sensor(admin_key, db, sensor):
             shutil.rmtree(self.FU.path(db, sensor))
@@ -227,16 +233,16 @@ class OngTSDB(object):
 
     def create_sensor(
         self,
-        admin_key,
-        db,
-        sensor,
-        period,
-        write_key,
-        read_key,
-        metrics,
-        force_update=False,
-        metadata=None,
-    ):
+        admin_key: str,
+        db: str,
+        sensor: str,
+        period: str,
+        write_key: str,
+        read_key: str,
+        metrics: list,
+        force_update: bool = False,
+        metadata: Optional[dict] = None,
+    ) -> None:
         """
         Creates a new sensor in the db (a directory for the sensor with its CONFIG.JSON file)
         :param admin_key: admin key to create sensor
@@ -270,7 +276,9 @@ class OngTSDB(object):
                 f"Sensor {sensor} already exist in {db}"
             )
 
-    def update_metadata(self, key, db, sensor, new_metadata):
+    def update_metadata(
+        self, key: str, db: str, sensor: str, new_metadata: dict
+    ) -> None:
         """Updates metadata of an existing sensor"""
         self._check_auth(key, Actions.CREATE, db, sensor)
         if self.exist_sensor(key, db, sensor):
@@ -281,13 +289,17 @@ class OngTSDB(object):
                 ujson.dumps(self.db[db][sensor]),
             )
 
-    def get_metrics(self, key, db, sensor, force_reload=False):
+    def get_metrics(
+        self, key: str, db: str, sensor: str, force_reload: bool = False
+    ) -> Optional[list]:
         """Returns the list of metrics of a certain db and sensor"""
         if force_reload:
             self.config_reload()
         return self._getmetadata(key, db, sensor, self.__METRICS_KEY)
 
-    def get_metadata(self, key, db, sensor, force_reload=False):
+    def get_metadata(
+        self, key: str, db: str, sensor: str, force_reload: bool = False
+    ) -> Optional[dict]:
         """Returns the list of metadata of a certain db and sensor"""
         if force_reload:
             self.config_reload()
@@ -296,27 +308,27 @@ class OngTSDB(object):
     def _getmetadata(self, key, db, sensor, field):
         return self.db[db][sensor].get(field)
 
-    def get_numpy_row(self, key, db, sensor):
+    def get_numpy_row(self, key: str, db: str, sensor: str) -> np.ndarray:
         """Returns an empty numpy row of the correct size for the sensor"""
         return np.zeros((1, len(self.get_metrics(key, db, sensor))))
 
-    def __get_record_size(self, key, db, sensor):
+    def __get_record_size(self, key: str, db: str, sensor: str) -> int:
         """Returns record size in bytes"""
         return np.dtype(DTYPE).itemsize * self.__get_array_size(key, db, sensor)
 
-    def __get_array_size(self, key, db, sensor):
+    def __get_array_size(self, key: str, db: str, sensor: str) -> int:
         """Returns record size in columns of the np.array writen in the chunks"""
         return 2 + len(self.get_metrics(key, db, sensor))
 
     def _replace_chunk(
         self,
-        db,
-        sensor,
-        original_chunk_name,
-        new_chunk_name,
-        new_array=None,
-        compressed=False,
-    ):
+        db: str,
+        sensor: str,
+        original_chunk_name: str,
+        new_chunk_name: str,
+        new_array: Optional[np.ndarray] = None,
+        compressed: bool = False,
+    ) -> None:
         """
         Replaces a chunk with a new one (that can be the compressed version or adding additional columns)
         :param db: data base name
@@ -336,7 +348,9 @@ class OngTSDB(object):
             f.write(new_array.tobytes())
         os.remove(self.get_FU_path(db, sensor, original_chunk_name))
 
-    def add_new_metrics(self, key, db, sensor, new_metrics: list, fill_value=0):
+    def add_new_metrics(
+        self, key: str, db: str, sensor: str, new_metrics: list, fill_value: float = 0
+    ) -> None:
         """Adds new metric(s) to a sensor. To so, opens all chunks from the changing chunk ahead,
         adds empty column to all of them, changes the column name an deletes the old ones"""
 
@@ -394,8 +408,13 @@ class OngTSDB(object):
                 )
 
     def write_tick_numpy(
-        self, key, db, sensor, np_values: np.array, np_timestamps=None
-    ):
+        self,
+        key: str,
+        db: str,
+        sensor: str,
+        np_values: np.ndarray,
+        np_timestamps: Optional[np.ndarray] = None,
+    ) -> None:
         """
         Writes a numpy array of tick data into database
         :param key: key for authentication
@@ -454,13 +473,21 @@ class OngTSDB(object):
             with self.FU.safe_createfile(chunk_name, "wb") as f:
                 f.write(value_write.tobytes())
 
-    def np2pd(self, key, db, sensor, dates, values, tz=LOCAL_TZ):
+    def np2pd(
+        self,
+        key: str,
+        db: str,
+        sensor: str,
+        dates: np.ndarray,
+        values: np.ndarray,
+        tz: str = LOCAL_TZ,
+    ) -> pd.DataFrame:
         dateindex = pd.to_datetime(dates, unit="s", utc=True).tz_convert(tz)
         return pd.DataFrame(
             values, index=dateindex, columns=self.get_metrics(key, db, sensor)
         )
 
-    def get_chunker(self, key, db, sensor):
+    def get_chunker(self, key: str, db: str, sensor: str) -> Chunker:
         """
         Returns the chunker object associated to the db name and sensor name
 
@@ -478,7 +505,7 @@ class OngTSDB(object):
         """
         return Chunker(self._getmetadata(key, db, sensor, self.__FREQ_KEY))
 
-    def get_last_timestamp(self, key, db, sensor):
+    def get_last_timestamp(self, key: str, db: str, sensor: str) -> Optional[float]:
         """Gets the last timestamp (in millis) of the data, None if no data available"""
         if not self.exist_sensor(key, db, sensor):
             return None
@@ -489,7 +516,14 @@ class OngTSDB(object):
         dates, _ = self.read(key, db, sensor, float(chunks[-1].split(".")[0]))
         return dates[-1]
 
-    def read(self, key, db, sensor, start_ts=None, end_ts=None):
+    def read(
+        self,
+        key: str,
+        db: str,
+        sensor: str,
+        start_ts: Optional[float] = None,
+        end_ts: Optional[float] = None,
+    ) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         """
         Reads data from the DB and returns it in either numpy arrays or in a pandas dataframe.
         All data is loaded in memory, so it could cause memory leaks if period is
@@ -513,7 +547,15 @@ class OngTSDB(object):
     def get_FU_path(self, *args):
         return self.FU.path(*args)
 
-    def read_iter(self, key, db, sensor, start_ts=None, end_ts=None, step=None):
+    def read_iter(
+        self,
+        key: str,
+        db: str,
+        sensor: str,
+        start_ts: Optional[float] = None,
+        end_ts: Optional[float] = None,
+        step: Optional[float] = None,
+    ) -> Iterator[tuple[np.ndarray, np.ndarray, float]]:
         """
         Reads data from the DB and returns an iterator that gives data chunk by chunk
         as numpy arrays.
@@ -656,14 +698,14 @@ class OngTSDB(object):
 
     def _read_chunk(
         self,
-        file_name,
-        start_ts,
-        end_ts,
-        SHAPE,
-        is_last_chunk,
+        file_name: str,
+        start_ts: float,
+        end_ts: float,
+        SHAPE: tuple[int, int],
+        is_last_chunk: bool,
         chunk_ts: int,
         tick_duration: float,
-    ):
+    ) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         if os.path.isfile(file_name):
             try:
                 orig_chunk_value = self.FU.fast_read_np(file_name, SHAPE, dtype=DTYPE)
@@ -721,7 +763,7 @@ class OngTSDB(object):
             return new_dates, new_values
         return None, None
 
-    def get_md5(self, file_name):
+    def get_md5(self, file_name: str) -> Union[str, int]:
         if os.path.isfile(file_name):
             with open(file_name, "rb") as f:
                 return hashlib.md5(f.read()).hexdigest()
