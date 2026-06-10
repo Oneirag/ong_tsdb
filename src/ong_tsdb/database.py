@@ -441,7 +441,6 @@ class OngTSDB(object):
         :return: None
         """
         self._check_auth(key, Actions.WRITE, db, sensor)
-        self.exist_sensor(key, db, sensor)
         if np_values.shape[1] != len(self.get_metrics(key, db, sensor)):
             raise InvalidDataWriteException("Invalid number of cols of numpy array")
         # Give default value to timestamp if not provided.
