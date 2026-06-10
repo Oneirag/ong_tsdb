@@ -218,6 +218,11 @@ class OngTSDB(object):
             shutil.rmtree(self.FU.path(db))
             if db in self.db:
                 self.db.pop(db)
+            # Drop all per-sensor locks for this database
+            with self._registry_lock:
+                for lock_db, lock_sensor in list(self._sensor_locks.keys()):
+                    if lock_db == db:
+                        del self._sensor_locks[(lock_db, lock_sensor)]
             return True
         else:
             return False
@@ -227,6 +232,9 @@ class OngTSDB(object):
         if self.exist_sensor(admin_key, db, sensor):
             shutil.rmtree(self.FU.path(db, sensor))
             self.db[db].pop(sensor)
+            # Drop the per-sensor lock
+            with self._registry_lock:
+                self._sensor_locks.pop((db, sensor), None)
             return True
         else:
             return False
