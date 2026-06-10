@@ -738,8 +738,9 @@ class OngTSDB(object):
             return new_dates, new_values
         return None, None
 
-    def get_mdf5(self, file_name):
+    def get_md5(self, file_name):
         if os.path.isfile(file_name):
-            return hashlib.md5(open(file_name, "rb").read()).hexdigest()
+            with open(file_name, "rb") as f:
+                return hashlib.md5(f.read()).hexdigest()
         else:
             return 0

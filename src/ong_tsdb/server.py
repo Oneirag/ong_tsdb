@@ -1,4 +1,5 @@
 import logging
+import os
 
 import ujson
 from ong_utils import is_debugging
@@ -468,9 +469,19 @@ def grafana_search(db_name, sensor_name, key=""):
     return jsonify(_db.get_metrics(key, db_name, sensor_name))
 
 
-@app.route("/get_md5/<filename>")
-def grafana_get_md5(filename):
-    return jsonify(_db.get_mdf5(filename))
+@app.route("/get_md5/<path:filename>")
+@auth_required
+def grafana_get_md5(filename, key):
+    """Returns MD5 hash of a chunk file. Path must be relative to BASE_DIR
+    and cannot escape it (path traversal is blocked)."""
+    base = _db.FU.base_path
+    full_path = os.path.realpath(os.path.join(base, filename))
+    if not full_path.startswith(
+        os.path.realpath(base) + os.sep
+    ) and full_path != os.path.realpath(base):
+        return make_js_response("Invalid path", 400)
+    md5 = _db.get_md5(full_path)
+    return jsonify(md5=md5) if md5 else make_js_response("File not found", 404)
 
 
 def main():
