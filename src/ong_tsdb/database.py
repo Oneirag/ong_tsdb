@@ -511,15 +511,30 @@ class OngTSDB(object):
         return Chunker(self._getmetadata(key, db, sensor, self.__FREQ_KEY))
 
     def get_last_timestamp(self, key: str, db: str, sensor: str) -> Optional[float]:
-        """Gets the last timestamp (in millis) of the data, None if no data available"""
+        """Gets the last timestamp (in seconds) of the data, None if no data available"""
         if not self.exist_sensor(key, db, sensor):
             return None
         self._check_auth(key, Actions.READ, db, sensor)
         chunks = self.FU.getchunks(db, sensor)
         if len(chunks) == 0:
             return None
-        dates, _ = self.read(key, db, sensor, float(chunks[-1].split(".")[0]))
-        return dates[-1]
+        chunker = self.get_chunker(key, db, sensor)
+        last_chunk_name = chunks[-1]
+        chunk_ts = float(last_chunk_name.split(".")[0])
+        try:
+            arr = self.FU.fast_read_np(
+                self.get_FU_path(db, sensor, last_chunk_name), dtype=DTYPE
+            )
+        except Exception:
+            return None
+        if arr is None:
+            return None
+        positions = arr[:, 0]
+        nonzero = positions[positions > 0]
+        if len(nonzero) == 0:
+            return None
+        last_pos = int(nonzero[-1])
+        return (last_pos - 1) * chunker.tick_duration + chunk_ts
 
     def read(
         self,
