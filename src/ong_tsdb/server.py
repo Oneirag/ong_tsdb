@@ -424,6 +424,13 @@ def grafana_query_chunked(db_name, sensor_name, key=""):
             if max_Datapoints is None
             else (end_t - start_t + 1) / float(max_Datapoints)
         )
+        # Pre-compute metric column indices to avoid O(n) lookups per row
+        target_indices = {}
+        for t in targets:
+            try:
+                target_indices[t] = metrics.index(t)
+            except ValueError:
+                target_indices[t] = None
         # print(f"{tick_time_spread=}")
         n_data_read = 0
         for dates, values, tick_duration in _db.read_iter(
@@ -435,10 +442,9 @@ def grafana_query_chunked(db_name, sensor_name, key=""):
                     dt = dates[i]
                     if dt >= start_t:
                         for t in targets:
-                            if not pd.isna(values[i, metrics.index(t)]):
-                                res[t].append(
-                                    "[%f,%f]" % (values[i, metrics.index(t)], dt * 1000)
-                                )
+                            idx = target_indices[t]
+                            if idx is not None and not pd.isna(values[i, idx]):
+                                res[t].append("[%f,%f]" % (values[i, idx], dt * 1000))
                         while start_t < dt:
                             start_t += tick_time_spread or tick_duration
                         n_data_read += 1
@@ -449,7 +455,7 @@ def grafana_query_chunked(db_name, sensor_name, key=""):
             t = targets[i]
             if i > 0:
                 yield ","
-            yield '{{"target":"{target}","datapoints":['.format(target=t)
+            yield f'{{"target":"{t}","datapoints":['
             yield ",".join(res[t])
             yield "]}"
         yield "]"
