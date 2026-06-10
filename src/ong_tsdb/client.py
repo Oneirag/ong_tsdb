@@ -1,4 +1,5 @@
 import base64
+import gzip
 import time
 import zlib
 
@@ -217,7 +218,7 @@ class OngTsdbClient:
             if do_gzip and len(body) > HTTP_COMPRESS_THRESHOLD:
                 kwargs["headers"] = {"content-encoding": "gzip"}
                 timer.tic("Gzipping body")
-                kwargs["body"] = zlib.compress(body)
+                kwargs["body"] = gzip.compress(body)
                 timer.toc("Gzipping body")
         success, json = self._post_retval(*args, **kwargs)
         return success
