@@ -343,16 +343,16 @@ class OngTsdbClient:
         else:
             return False
 
-    def write_df(self, db: str, sensor: str, df, fill_value=0) -> bool:
+    def write_df(self, db: str, sensor: str, df: pd.DataFrame, fill_value=0) -> bool:
         """Writes a pandas dataframe into a certain database and sensor.
         Pandas data frame must be indexed by dates and have metrics/measurements as columns"""
-        # Check index
-        pass
-        # Generate a sequence out of the given data
-        sequence = []
-        for idx, row in df.iterrows():
-            sequence.append((db, sensor, list(row.index), list(row.values), idx.value))
-
+        columns = list(df.columns)
+        values = df.values.tolist()
+        timestamps = df.index.values.astype(np.int64).tolist()
+        sequence = [
+            (db, sensor, columns, row_values, ts)
+            for row_values, ts in zip(values, timestamps)
+        ]
         return self.write(sequence, fill_value=fill_value)
 
     def config_reload(self):
