@@ -317,10 +317,10 @@ class OngTSDB(object):
             new_array = self.FU.fast_read_np(
                 self.get_FU_path(db, sensor, original_chunk_name), dtype=DTYPE
             )
-        f = self.FU.safe_createfile(self.get_FU_path(db, sensor, new_chunk_name), "wb")
-        f.write(new_array.tobytes())
-        f.close()
-        # Delete old chunk and keep just new one
+        with self.FU.safe_createfile(
+            self.get_FU_path(db, sensor, new_chunk_name), "wb"
+        ) as f:
+            f.write(new_array.tobytes())
         os.remove(self.get_FU_path(db, sensor, original_chunk_name))
 
     def add_new_metrics(self, key, db, sensor, new_metrics: list, fill_value=0):
@@ -408,21 +408,14 @@ class OngTSDB(object):
         pos = chunker.getpos(np_timestamps)
         with self._get_sensor_lock(db, sensor):
             if not os.path.isfile(chunk_name):
-                f = self.FU.safe_createfile(chunk_name, "wb")
-                # Default values are NaN instead of 0's
                 value_write = np.full(
                     (chunker.n_rows_per_chunk, cols_chunk_array),
                     fill_value=np.nan,
                     dtype=DTYPE,
                 )
             else:
-                # Open for read only
-                f = self.FU.get_open_func(chunk_name)(chunk_name, "rb")
-                raw = f.read()
-                f.close()
-                # Defensive: refuse to overwrite a corrupt chunk. Reading with
-                # the wrong dtype (e.g. float64) is the easiest way to
-                # silently destroy data, so we always read with DTYPE.
+                with self.FU.get_open_func(chunk_name)(chunk_name, "rb") as f:
+                    raw = f.read()
                 expected_bytes = (
                     chunker.n_rows_per_chunk
                     * cols_chunk_array
@@ -436,19 +429,17 @@ class OngTSDB(object):
                     )
                 value_write = np.frombuffer(raw, dtype=DTYPE)
                 value_write.shape = (chunker.n_rows_per_chunk, cols_chunk_array)
-                # Reopen for writing
-                f = self.FU.get_open_func(chunk_name)(chunk_name, "wb")
 
-            value_write = np.array(value_write)  # Make sure it is contiguous
-            idx_not_nan = np.nonzero(~np.isnan(np_values))  # Write only not nan values
+            value_write = np.array(value_write)
+            idx_not_nan = np.nonzero(~np.isnan(np_values))
             value_write[pos[idx_not_nan[0]], idx_not_nan[1] + 1] = np_values[
                 idx_not_nan
             ]
             vw = value_write[pos, 1:-1]
             value_write[pos, -1] = np.nansum(vw, axis=1)
             value_write[pos, 0] = pos + 1
-            f.write(value_write.tobytes())
-            f.close()
+            with self.FU.safe_createfile(chunk_name, "wb") as f:
+                f.write(value_write.tobytes())
 
     def np2pd(self, key, db, sensor, dates, values, tz=LOCAL_TZ):
         dateindex = pd.to_datetime(dates, unit="s", utc=True).tz_convert(tz)
