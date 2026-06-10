@@ -23,6 +23,17 @@ from ong_tsdb.exceptions import (
 
 timer = OngTimer(False)
 
+_local_db = None
+
+
+def _get_local_db():
+    global _local_db
+    if _local_db is None:
+        from ong_tsdb.database import OngTSDB
+
+        _local_db = OngTSDB()
+    return _local_db
+
 
 class OngTsdbClient:
     def __init__(
@@ -455,9 +466,7 @@ class OngTsdbClient:
         :return: a pandas dataframe
         """
         # This local import avoid problems when just needing remote client in windows
-        from ong_tsdb.database import OngTSDB
-
-        _db = OngTSDB()
+        _db = _get_local_db()
         end_ts = date_to.timestamp() if date_to else None
         data = _db.read(
             self.token, db, sensor, start_ts=date_from.timestamp(), end_ts=end_ts
