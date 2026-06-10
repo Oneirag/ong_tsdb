@@ -45,6 +45,7 @@ class OngTsdbClient:
         retry_backoff_factor=0.2,
         proxy_auth_body: dict = None,
         validate_server_version: bool = True,
+        auto_connect: bool = True,
         **kwargs,
     ):
         """
@@ -61,6 +62,8 @@ class OngTsdbClient:
         server with authentication, this is the body to be posted to the login page)
         :param validate_server_version: True (default) to validate that the version of the server is greater or equal
          than the same as the client to raise a WrongVersionException, False otherwise
+        :param auto_connect: if True (default), calls connect() to verify the server is reachable.
+            Set to False to defer connection to first actual request.
         """
         self.validate_server_version = validate_server_version
         if proxy_auth_body is None:
@@ -81,16 +84,25 @@ class OngTsdbClient:
             connect=retry_connect,
             backoff_factor=retry_backoff_factor,
         )
-        # Force reload configuration, that also serves as a connection test to make sure server is running
+        if auto_connect:
+            self.connect()
+
+    def connect(self):
+        """Establish connection to the server and handle proxy authentication if needed.
+
+        This performs a config reload as a connection test and negotiates
+        proxy auth when the server is behind an auth proxy. Safe to call
+        multiple times (subsequent calls are no-ops once connected).
+        """
         for attempt in range(2):
             try:
-                res = self.config_reload()
+                self.config_reload()
                 break
             except NotAuthorizedException:
                 pass  # Not important
                 break
             except ProxyNotAuthorizedException as pnae:
-                """Needs to send proxy authentication. 
+                """Needs to send proxy authentication.
                 It will only be sent if server responds with application/json
                 Response body will be compose of form field received from server (if any) updated with
                 the proxy_auth_body dictionary"""
