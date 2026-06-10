@@ -131,11 +131,11 @@ def test_read_iter_cache_cleanup_on_abort(db):
     )
     gen = db.read_iter(READ, "test", "s1", 0, _now() + 1e9)
     next(gen)  # start iterating; populates the cache
-    assert len(db.cache) == 1
+    assert len(db._cache) == 1
     gen.close()
     # Give the background thread a moment to potentially run
     time.sleep(0.05)
-    assert len(db.cache) == 0
+    assert len(db._cache) == 0
 
 
 def test_concurrent_writes_no_corruption(tmp_path):

@@ -12,11 +12,11 @@ import shutil
 import string
 import threading
 import time
+from typing import NamedTuple, Optional
 
 import numpy as np
 import pandas as pd
 import ujson
-from six.moves._thread import start_new_thread
 
 from ong_tsdb import logger, LOCAL_TZ, BASE_DIR, DTYPE
 from ong_tsdb.chunker import Chunker
@@ -36,6 +36,17 @@ class Actions(enum.Enum):
     WRITE = 3
 
 
+class _PrefetchCache:
+    __slots__ = ("data_available", "d", "v", "fn", "alive")
+
+    def __init__(self):
+        self.data_available = False
+        self.d = None
+        self.v = None
+        self.fn = ""
+        self.alive = True
+
+
 class OngTSDB(object):
     __FREQ_KEY = "Freq"
     __METRICS_KEY = "Metrics"
@@ -53,6 +64,8 @@ class OngTSDB(object):
         # Per-sensor locks: serialise chunk I/O for the same (db, sensor)
         # without blocking work on other sensors. Created lazily.
         self._sensor_locks: dict = {}
+        self._cache: dict = {}
+        self._cache_counter: int = 0
         self.FU = FileUtils(path)
         if not os.path.isfile(self.FU.path_config()):
             # Bootstrap a new database at the requested path, NOT at the
@@ -547,9 +560,6 @@ class OngTSDB(object):
         end_ts = end_ts or time.time()
         chunk = start_ts
 
-        class Cache(object):
-            pass
-
         def cache_read(
             cache,
             file_name,
@@ -578,17 +588,10 @@ class OngTSDB(object):
             cache.v = new_values
             cache.fn = file_name
 
-        if not hasattr(self, "cache"):
-            self.cache = dict()
-        if not hasattr(self, "_cache_counter"):
-            self._cache_counter = 0
         self._cache_counter += 1
         cache_key = self._cache_counter
-        cache_obj = Cache()
-        cache_obj.data_available = False
-        cache_obj.fn = ""
-        cache_obj.alive = True
-        self.cache[cache_key] = cache_obj
+        cache_obj = _PrefetchCache()
+        self._cache[cache_key] = cache_obj
 
         def get_chunk_filename(chunk):
             for compressed in (False, True):
@@ -607,7 +610,7 @@ class OngTSDB(object):
 
                 chunk += max(chunker.chunk_duration, step)
                 next_file_name = get_chunk_filename(chunk)
-                cache = self.cache[cache_key]
+                cache = self._cache[cache_key]
                 if cache.data_available and cache.fn == file_name:
                     new_dates, new_values = cache.d, cache.v
                 else:
@@ -622,9 +625,9 @@ class OngTSDB(object):
                     )
                 cache.data_available = False
                 if not is_last_chunk:
-                    start_new_thread(
-                        cache_read,
-                        (
+                    threading.Thread(
+                        target=cache_read,
+                        args=(
                             cache,
                             next_file_name,
                             start_ts,
@@ -634,7 +637,8 @@ class OngTSDB(object):
                             chunker.chunk_timestamp(chunk),
                             chunker.tick_duration,
                         ),
-                    )
+                        daemon=True,
+                    ).start()
 
                 if new_dates is not None:
                     yield new_dates, new_values, chunker.tick_duration
@@ -645,10 +649,10 @@ class OngTSDB(object):
             # out of the generator (e.g. with .close()) or an exception
             # propagates. The alive flag tells the background read thread
             # to drop its result if it has not started yet.
-            cache_obj = self.cache.get(cache_key)
+            cache_obj = self._cache.get(cache_key)
             if cache_obj is not None:
                 cache_obj.alive = False
-            self.cache.pop(cache_key, None)
+            self._cache.pop(cache_key, None)
 
     def _read_chunk(
         self,
