@@ -1,4 +1,3 @@
-#!/usr/bin/python3.8
 # -*- coding: utf-8 -*-
 """
 Class to manage file storage (under BASE_DIR directory)
@@ -171,10 +170,6 @@ class OngTSDB(object):
     def exist_db(self, key, db):
         """True id db exists"""
         return db in self.db
-        # if db not in self.db.keys():
-        #     if not os.path.isdir(self.FU.path(db)):
-        #         return False
-        # return True
 
     def exist_sensor(self, key, db, sensor):
         """Checks if a sensor exists in database"""
@@ -384,7 +379,6 @@ class OngTSDB(object):
                 self._replace_chunk(
                     db, sensor, old_chunk_name, new_chunk_name, new_array, compressed
                 )
-        pass
 
     def write_tick_numpy(
         self, key, db, sensor, np_values: np.array, np_timestamps=None
@@ -412,7 +406,6 @@ class OngTSDB(object):
             db, sensor, chunker.chunk_name(np_timestamps[0], cols_chunk_array)
         )
         pos = chunker.getpos(np_timestamps)
-        # print(f"Writen in chunk: {chunk_name=} {pos=} {timestamp=}")
         with self._get_sensor_lock(db, sensor):
             if not os.path.isfile(chunk_name):
                 f = self.FU.safe_createfile(chunk_name, "wb")
@@ -509,7 +502,6 @@ class OngTSDB(object):
                 values = new_values
                 dates = new_dates
             else:
-                # TODO: fix shapes to allow stack.Shape (5,) does not stack but (5,1) does
                 values = np.vstack((values, new_values))
                 dates = np.hstack((dates, new_dates))
         return dates, values
@@ -678,7 +670,6 @@ class OngTSDB(object):
         tick_duration: float,
     ):
         if os.path.isfile(file_name):
-            #            o.tic()
             try:
                 orig_chunk_value = self.FU.fast_read_np(file_name, SHAPE, dtype=DTYPE)
             except ValueError as e:
@@ -728,9 +719,6 @@ class OngTSDB(object):
                     logger.warning("Invalid indexes: ")
                     logger.warning(invalids)
             new_values = chunk_value[:, range(1, SHAPE[1] - 1, 1)]
-            # new_dates = chunk_value[:, 0].astype(np.float64) - 1 + chunk_ts
-            # These copies forces contiguous data in the arrays
-            # makes faster pickling buy might also make other things faster
             if not new_values.flags.c_contiguous:
                 new_values = new_values.copy()
             if not new_dates.flags.c_contiguous:
