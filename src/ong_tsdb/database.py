@@ -6,8 +6,8 @@ Class to manage file storage (under BASE_DIR directory)
 
 import enum
 import hashlib
+import hmac
 import os
-import random
 import shutil
 import string
 import threading
@@ -127,7 +127,10 @@ class OngTSDB(object):
         elif sensor not in self.db[db]:
             return False
         else:
-            return self.db[db][sensor].get(key_name) == key_value
+            stored = self.db[db][sensor].get(key_name)
+            if stored is None:
+                return False
+            return hmac.compare_digest(stored, key_value)
 
     def _get_sensor_lock(self, db: str, sensor: str) -> threading.Lock:
         """Returns the lock associated with (db, sensor), creating it on first use.
@@ -150,18 +153,15 @@ class OngTSDB(object):
         NotAuthorizedException otherwise. The exception message includes
         the action name and target (db/sensor) for easier debugging.
         """
-        if key == self.admin_key:
+        if hmac.compare_digest(key, self.admin_key):
             return  # admin key is valid for any action
         if action != Actions.CREATE:
-            is_writekey = self.__is_key(db, sensor, self.__WRITE_KEY, key)
-            if is_writekey and action in (Actions.WRITE, Actions.READ):
-                return
-            is_readkey = self.__is_key(db, sensor, self.__READ_KEY, key)
-            if is_readkey and action in (Actions.READ,):
-                return
-        time.sleep(
-            random.random() * 0.01
-        )  # This random prevents performing time attacks
+            if self.__is_key(db, sensor, self.__WRITE_KEY, key):
+                if action in (Actions.WRITE, Actions.READ):
+                    return
+            if self.__is_key(db, sensor, self.__READ_KEY, key):
+                if action in (Actions.READ,):
+                    return
         target = f"{db}/{sensor}" if sensor else (db or "<global>")
         raise NotAuthorizedException(f"Invalid key for {action.name} on {target}")
 
