@@ -398,6 +398,34 @@ class FileUtils(object):
             pprint(stat)
         return stat
 
+    def _iter_chunks(self, filter_db_name=None):
+        """Generator that yields (db_name, sensor, sensorpath, cf, ts, diff, date)
+        for every chunk in the database, one at a time, without building any
+        materialised list in memory."""
+        for db_name in self.getdbs():
+            if filter_db_name and db_name != filter_db_name:
+                continue
+            for sensor in self.getsensors(db_name):
+                sensorpath = self.path(db_name, sensor)
+                chunkfiles = _get_chunkfiles(sensorpath)
+                if not chunkfiles:
+                    continue
+                timestamps = [float(f.split(".")[0]) for f in chunkfiles]
+                dates = [time.asctime(time.gmtime(f)) for f in timestamps]
+                prev_ts = None
+                for i, cf in enumerate(chunkfiles):
+                    ts = timestamps[i]
+                    diff = ts - prev_ts if prev_ts is not None else None
+                    prev_ts = ts
+                    yield db_name, sensor, sensorpath, cf, ts, diff, dates[i]
+
+    def _count_chunks(self, filter_db_name=None):
+        """Fast count of all chunks without allocating any per-chunk structures."""
+        n = 0
+        for _ in self._iter_chunks(filter_db_name):
+            n += 1
+        return n
+
     def verify_all_chunks(
         self,
         filter_db_name=None,
@@ -433,84 +461,50 @@ class FileUtils(object):
         if progress:
             quiet = True
 
-        # Phase 1: discover all chunks so we know the total for the progress
-        # bar. We do this in one pass and process in a second so the bar
-        # can show real progress.
-        sensors_chunks = []
-        for db_name in self.getdbs():
-            if filter_db_name and db_name != filter_db_name:
-                continue
-            for sensor in self.getsensors(db_name):
-                sensorpath = self.path(db_name, sensor)
-                chunkfiles = _get_chunkfiles(sensorpath)
-                if not chunkfiles:
-                    continue
-                timestamps = [float(f.split(".")[0]) for f in chunkfiles]
-                dates = [time.asctime(time.gmtime(f)) for f in timestamps]
-                chunks = []
-                for i, cf in enumerate(chunkfiles):
-                    diff = timestamps[i] - timestamps[i - 1] if i > 0 else None
-                    chunks.append(
-                        {
-                            "cf": cf,
-                            "diff": diff,
-                            "date": dates[i],
-                            "ts": timestamps[i],
-                        }
-                    )
-                sensors_chunks.append(
-                    {
-                        "db": db_name,
-                        "sensor": sensor,
-                        "sensorpath": sensorpath,
-                        "chunks": chunks,
-                    }
-                )
-
-        total_chunks = sum(len(s["chunks"]) for s in sensors_chunks)
+        # Count total chunks for the progress bar without materialising
+        # metadata for every chunk in memory.
+        total_chunks = self._count_chunks(filter_db_name) if progress else None
         bar = _make_progress_bar(total_chunks) if progress else None
 
-        # Phase 2: process all chunks
+        # Process all chunks via streaming generator
         corrupt = []
         last_sensor = (None, None)
         sensor_total = 0
         sensor_count = 0
         try:
-            for s in sensors_chunks:
-                db_name = s["db"]
-                sensor = s["sensor"]
-                sensorpath = s["sensorpath"]
-                for c in s["chunks"]:
-                    fpath = self.path(sensorpath, c["cf"])
-                    if not quiet and (db_name, sensor) != last_sensor:
-                        if last_sensor != (None, None):
-                            print()
-                            print(
-                                f"Summary for db_name={last_sensor[0]} "
-                                f"sensor={last_sensor[1]}"
-                            )
-                            print(f"Number of chunks: {sensor_count}")
-                            print(f"Number of used rows: {sensor_total}")
-                            print()
-                        print(f"--- {db_name}/{sensor} ---")
-                        last_sensor = (db_name, sensor)
-                        sensor_total = 0
-                        sensor_count = 0
-                    if not quiet:
-                        print("{} - {} - {}".format(c["ts"], c["diff"], c["date"]))
-                    try:
-                        stat = self.__verify_chunk_content(
-                            fpath,
-                            dtype=dtype,
-                            print_summary_stats=print_per_chunk_data and not quiet,
+            for db_name, sensor, sensorpath, cf, ts, diff, date in self._iter_chunks(
+                filter_db_name
+            ):
+                fpath = self.path(sensorpath, cf)
+                if not quiet and (db_name, sensor) != last_sensor:
+                    if last_sensor != (None, None):
+                        print()
+                        print(
+                            f"Summary for db_name={last_sensor[0]} "
+                            f"sensor={last_sensor[1]}"
                         )
-                        sensor_total += stat["rows_used"]
-                    except ValueError as e:
-                        logger.error(f"Corrupt chunk: {fpath} -- {e}")
-                        corrupt.append((fpath, str(e), c["diff"], c["date"]))
-                    sensor_count += 1
-                    if bar is not None:
-                        bar.update(1)
+                        print(f"Number of chunks: {sensor_count}")
+                        print(f"Number of used rows: {sensor_total}")
+                        print()
+                    print(f"--- {db_name}/{sensor} ---")
+                    last_sensor = (db_name, sensor)
+                    sensor_total = 0
+                    sensor_count = 0
+                if not quiet:
+                    print("{} - {} - {}".format(ts, diff, date))
+                try:
+                    stat = self.__verify_chunk_content(
+                        fpath,
+                        dtype=dtype,
+                        print_summary_stats=print_per_chunk_data and not quiet,
+                    )
+                    sensor_total += stat["rows_used"]
+                except ValueError as e:
+                    logger.error(f"Corrupt chunk: {fpath} -- {e}")
+                    corrupt.append((fpath, str(e), diff, date))
+                sensor_count += 1
+                if bar is not None:
+                    bar.update(1)
         finally:
             if bar is not None:
                 bar.close()
