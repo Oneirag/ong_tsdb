@@ -21,5 +21,5 @@ def split_influx(line: str) -> tuple:
         data_metrics = [m for m, v in metrics]
         data_values = [float(v) for m, v in metrics]
         return db, sensor, data_metrics, data_values, float(ts)
-    except Exception as e:
+    except (ValueError, IndexError) as e:
         raise InfluxParseException(f"Error parsing line {line}: {e}")
