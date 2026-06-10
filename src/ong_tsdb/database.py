@@ -305,7 +305,9 @@ class OngTSDB(object):
             self.config_reload()
         return self._getmetadata(key, db, sensor, self.__METADATA_KEY)
 
-    def _getmetadata(self, key, db, sensor, field):
+    def _getmetadata(
+        self, key: str, db: str, sensor: str, field: str
+    ) -> Optional[Union[list, dict]]:
         return self.db[db][sensor].get(field)
 
     def get_numpy_row(self, key: str, db: str, sensor: str) -> np.ndarray:
