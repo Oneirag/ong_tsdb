@@ -445,7 +445,7 @@ class OngTSDB(object):
                 idx_not_nan
             ]
             vw = value_write[pos, 1:-1]
-            value_write[pos, -1] = np.ma.masked_array(vw, np.isnan(vw)).sum(axis=1)
+            value_write[pos, -1] = np.nansum(vw, axis=1)
             value_write[pos, 0] = pos + 1
             f.write(value_write.tobytes())
             f.close()
@@ -704,7 +704,7 @@ class OngTSDB(object):
             if len(chunk_value) > 0:
                 value_check = chunk_value[:, 1:-1]
                 checksum_ok = np.isclose(
-                    np.ma.masked_array(value_check, np.isnan(value_check)).sum(1),
+                    np.nansum(value_check, axis=1),
                     chunk_value[:, -1],
                 )
                 if not checksum_ok.all():
