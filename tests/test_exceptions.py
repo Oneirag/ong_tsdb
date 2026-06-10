@@ -6,14 +6,14 @@ from ong_tsdb.database import (
     ElementNotFoundException as srv_nf,
     InvalidDataWriteException as srv_inv,
     NotAuthorizedException as srv_na,
-    OngTSDBbBaseException as srv_base,
+    OngTSDBBaseException as srv_base,
 )
 from ong_tsdb.exceptions import (
     ElementAlreadyExistsException as cli_exists,
     ElementNotFoundException as cli_nf,
     InvalidDataWriteException as cli_inv,
     NotAuthorizedException as cli_na,
-    OngTSDBbBaseException as cli_base,
+    OngTSDBBaseException as cli_base,
 )
 
 

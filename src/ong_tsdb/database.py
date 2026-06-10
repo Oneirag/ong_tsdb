@@ -8,6 +8,7 @@ import enum
 import hashlib
 import hmac
 import os
+import secrets
 import shutil
 import string
 import threading
@@ -21,7 +22,7 @@ from six.moves._thread import start_new_thread
 from ong_tsdb import logger, LOCAL_TZ, BASE_DIR, DTYPE
 from ong_tsdb.chunker import Chunker
 from ong_tsdb.exceptions import (  # noqa: F401  -- re-exports for back-compat
-    OngTSDBbBaseException,
+    OngTSDBBaseException,
     NotAuthorizedException,
     ElementAlreadyExistsException,
     ElementNotFoundException,
@@ -61,7 +62,9 @@ class OngTSDB(object):
             # passed.
             os.makedirs(path, exist_ok=True)
             length = 20
-            admin_key = "".join(random.sample(string.hexdigits, int(length)))
+            admin_key = "".join(
+                secrets.choice(string.hexdigits) for _ in range(int(length))
+            )
             with self.FU.safe_createfile(self.FU.path_config(), "w") as f:
                 f.write(admin_key)
             # Print the key ONCE to stdout with a clear banner so the user

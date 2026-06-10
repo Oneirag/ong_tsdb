@@ -3,7 +3,10 @@ class OngTsdbClientBaseException(Exception):
 
 
 class NotAuthorizedException(OngTsdbClientBaseException):
-    """Exception raised when 401 error is received from server"""
+    """Raised when a key is invalid for the requested action.
+
+    Used by both client (401/407 responses) and server (auth checks).
+    Previously defined twice (client and server versions); now unified."""
 
     pass
 
@@ -40,21 +43,17 @@ class WrongServerVersion(OngTsdbClientBaseException):
 # OngTsdbClientBaseException` clauses on the client still capture them.
 
 
-class OngTSDBbBaseException(OngTsdbClientBaseException):
+class OngTSDBBaseException(OngTsdbClientBaseException):
     """Base class for server-side exceptions."""
 
 
-class NotAuthorizedException(OngTsdbClientBaseException):
-    """Raised on the server side when a key is invalid for the requested action."""
-
-
-class ElementAlreadyExistsException(OngTSDBbBaseException):
+class ElementAlreadyExistsException(OngTSDBBaseException):
     pass
 
 
-class ElementNotFoundException(OngTSDBbBaseException):
+class ElementNotFoundException(OngTSDBBaseException):
     pass
 
 
-class InvalidDataWriteException(OngTSDBbBaseException):
+class InvalidDataWriteException(OngTSDBBaseException):
     pass
