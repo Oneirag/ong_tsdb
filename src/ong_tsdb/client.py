@@ -1,6 +1,7 @@
 import base64
 import gzip
 import time
+import weakref
 import zlib
 
 import msgpack
@@ -84,6 +85,7 @@ class OngTsdbClient:
             connect=retry_connect,
             backoff_factor=retry_backoff_factor,
         )
+        weakref.finalize(self, self.http.clear)
         if auto_connect:
             self.connect()
 
@@ -567,7 +569,3 @@ class OngTsdbClient:
         if metrics is not None:
             df = df.loc[:, metrics]
         return df
-
-    def __del__(self):
-        """Forces http pool manager to be cleared (to avoid warning in unittest)"""
-        self.http.clear()
