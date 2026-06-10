@@ -53,7 +53,7 @@ class Chunker(object):
                     60 * 60 * 24
                 )  # Internally work with UTC, so this should work ok
             else:
-                raise Exception("Frequency: " + freq + " not implemented")
+                raise ValueError("Frequency: " + freq + " not implemented")
             self.tick_duration = period_length * multiplier
         else:
             self.tick_duration = float(freq)
