@@ -226,14 +226,25 @@ def write_point_list(key: str, point_list: list, fill_value: float = 0) -> None:
     # For each group, send a numpy array to write_ticks_numpy so they are written all together
     for db_meter_data in db_meter_data_dict.values():
         if db_meter_data.new_metrics:
-            _db.add_new_metrics(key, db_meter_data.db, db_meter_data.sensor, db_meter_data.new_metrics,
-                                fill_value=fill_value)
-        metrics_db = _db.get_metrics(key, db_meter_data.db, db_meter_data.sensor)
-        for (chunk_name, data_metrics), data_values, metrics_ts in zip(db_meter_data.data_metrics.items(),
-                                                                       db_meter_data.data_values.values(),
-                                                                       db_meter_data.timestamps.values()):
-            np_values = np.full((len(data_metrics), len(metrics_db)), np.nan, dtype=DTYPE)
-            for idx, (dt_metrics, dt_values) in enumerate(zip(data_metrics, data_values)):
+            _get_db().add_new_metrics(
+                key,
+                db_meter_data.db,
+                db_meter_data.sensor,
+                db_meter_data.new_metrics,
+                fill_value=fill_value,
+            )
+        metrics_db = _get_db().get_metrics(key, db_meter_data.db, db_meter_data.sensor)
+        for (chunk_name, data_metrics), data_values, metrics_ts in zip(
+            db_meter_data.data_metrics.items(),
+            db_meter_data.data_values.values(),
+            db_meter_data.timestamps.values(),
+        ):
+            np_values = np.full(
+                (len(data_metrics), len(metrics_db)), np.nan, dtype=DTYPE
+            )
+            for idx, (dt_metrics, dt_values) in enumerate(
+                zip(data_metrics, data_values)
+            ):
                 np_values[idx, [metrics_db.index(m) for m in dt_metrics]] = dt_values
             np_ts = np.array(metrics_ts)
             _db.write_tick_numpy(key, db_meter_data.db, db_meter_data.sensor, np_values, np_ts)
