@@ -303,3 +303,121 @@ To configure the datasource:
   + Password: the token you want to use. It can be the read_token, write_token or admin_token. No other will work
 
 These data sources can be used in any grafana chart
+
+## Database maintenance
+
+The package ships with two CLI subcommands for inspecting and repairing
+chunk files without needing to write Python:
+
+```shell
+python -m ong_tsdb <subcommand> [options]
+```
+
+### Why chunks may become corrupt
+
+Chunk files are written with a single `f.write(value_write.tobytes())`
+call. If the process is killed (OOM, power loss, manual `kill`, SD-card
+glitch) between the moment the file is opened and the moment the
+buffer is flushed, the file is left truncated. Reads on a truncated
+file used to crash with a bare `cannot reshape array of size X into
+shape (Y,Z)` message; since v0.8.0 the read path catches that and
+skips the bad chunk, and a CLI tool is provided to actually fix the
+file.
+
+### `verify` — scan for corrupt chunks
+
+```shell
+# Verbose scan (every chunk + per-sensor summary)
+python -m ong_tsdb verify
+
+# Just the corrupt list, with full context (path, expected/actual
+# bytes, missing delta, previous chunk timestamp for reference)
+python -m ong_tsdb verify --corrupt-only
+
+# Add a progress bar (tqdm if installed, else a stdlib fallback)
+python -m ong_tsdb verify --corrupt-only --progress
+
+# Restrict the scan to a single database
+python -m ong_tsdb verify --db mydb
+
+# Override BASE_DIR
+python -m ong_tsdb verify --base-dir /path/to/ong_tsdb
+```
+
+Exit code is 0 when no chunk is corrupt, 1 otherwise (suitable for
+shell scripts and CI smoke tests).
+
+### `repair` — auto-fix truncated chunks
+
+For each corrupt chunk found by `verify`, the repair tool:
+
+1. Reads the complete rows from the truncated file (the trailing
+   partial row, if any, is discarded).
+2. Validates the checksums of the data rows (the same `nansum`
+   check used by the read path). If a recovered row's checksum
+   does not match, the file is left untouched.
+3. Rebuilds the file to the correct `CHUNK_ROWS × (n_metrics + 2)`
+   size by padding the missing rows with `NaN` (the same convention
+   used for unwritten rows in a fresh chunk).
+4. Renames the original to `<file>.corrupt.bak` so it can be
+   restored if anything looks wrong after the fix.
+5. Writes the repaired file atomically (`safe_createfile`,
+   i.e. `<file>.tmp.<pid>` + `os.replace`).
+
+```shell
+# Preview what would be repaired (no writes)
+python -m ong_tsdb repair --db mydb --dry-run
+
+# Repair everything that can be safely repaired
+python -m ong_tsdb repair --db mydb
+
+# Repair without keeping the original at <file>.corrupt.bak
+python -m ong_tsdb repair --db mydb --no-backup
+```
+
+Example output:
+
+```
+Found 2 corrupt chunk(s).
+  /home/.../meter/mirubee/1715044352.10
+    Corrupt chunk ...: expected 163840 elements (16384 rows x 10 cols, ...,
+    655360 bytes), got 160768 elements (643072 bytes). Missing 3072
+    elements (12288 bytes). Likely a truncated write.
+  /home/.../meter/seeedstudio/1769832448.6
+    ...
+
+  REPAIR  /home/.../meter/mirubee/1715044352.10
+          kept 16076 row(s), padded 308 NaN row(s)
+  REPAIR  /home/.../meter/seeedstudio/1769832448.6
+          kept 16213 row(s), padded 171 NaN row(s)
+
+Repaired 2 chunk(s), skipped 0.
+Originals preserved at <file>.corrupt.bak
+=== All 2 repaired file(s) now pass fast_read_np ===
+```
+
+Only the files that were touched are re-verified after the repair, so
+the command stays fast even on large databases (a full-database
+re-scan could take minutes if you have many sensors or years of data).
+
+### Recommended workflow
+
+```shell
+# 1. Detect
+python -m ong_tsdb verify --corrupt-only
+
+# 2. Preview
+python -m ong_tsdb repair --db mydb --dry-run
+
+# 3. Repair
+python -m ong_tsdb repair --db mydb
+
+# 4. Confirm
+python -m ong_tsdb verify --corrupt-only
+# -> exit 0, "All chunks OK"
+```
+
+Once you have confirmed the data looks right, the `.corrupt.bak` files
+can be removed with a simple
+`find BASE_DIR -name "*.corrupt.bak" -delete`.
+
