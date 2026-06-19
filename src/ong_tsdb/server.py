@@ -28,7 +28,14 @@ from ong_utils import OngTimer, is_debugging, find_available_port
 
 time_it = OngTimer(enabled=is_debugging(), logger=logger,
                    log_level=logging.DEBUG if not is_debugging() else logging.INFO)
-_db = OngTSDB()
+_db = None
+
+
+def _get_db():
+    global _db
+    if _db is None:
+        _db = OngTSDB()
+    return _db
 
 app = Flask(__name__)
 
