@@ -64,18 +64,21 @@ class OngTSDB(object):
         otherwise it will be created with a new admin password that will be shown with logger.info"""
         self.FU = FileUtils(path)
         if not os.path.isfile(self.FU.path_config()):
-            os.makedirs(BASE_DIR)
-            FU = FileUtils()
+            # Bootstrap a new database at the requested path, NOT at the
+            # global BASE_DIR. The previous implementation always wrote
+            # the config to BASE_DIR, which was wrong when a custom path
+            # was passed.
+            os.makedirs(path, exist_ok=True)
             length = 20
             admin_key = ''.join(random.sample(string.hexdigits, int(length)))
-            with FU.safe_createfile(FU.path_config(), "w") as f:
+            with self.FU.safe_createfile(self.FU.path_config(), "w") as f:
                 f.write(admin_key)
             logger.info("DB correctly setup")
             logger.info("Admin key is")
             logger.info("=" * length)
             logger.info(admin_key)
             logger.info("=" * length)
-            logger.info("You can check admin key in {}".format(FU.path_config()))
+            logger.info("You can check admin key in {}".format(self.FU.path_config()))
 
         with open(self.FU.path_config(), "r") as f:
             self.admin_key = f.readline().strip()

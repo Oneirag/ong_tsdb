@@ -423,6 +423,61 @@ can be removed with a simple
 
 ## Changelog
 
+### 0.9.2
+This is a correctness release that closes two `NameError` holes that
+slipped through the 0.9.0 → 0.9.1 cycle because of a partial revert
+(commit `9998159`, "Revert Release/0.9.0") followed by an
+incomplete re-merge (PR #29). After `pip install ong_tsdb==0.9.1` the
+installed `src/ong_tsdb/server.py` ended up calling `_get_db()` 29
+times without the helper ever being defined; **every** request to
+`/influx`, `/influx_binary`, `/read_df`, `/metrics`, `/metadata`, etc.
+raised `NameError: name '_get_db' is not defined` and returned HTTP
+500. Reinstalling from `master` did not recover a working state
+because the bug is on `master` itself.
+
+The fix is two small surgical changes; no behaviour change relative
+to the post-0.9.0 design intent.
+
+- **fix**: re-introduce the `def _get_db():` lazy-init helper in
+  `src/ong_tsdb/server.py` and switch the module-level `_db` from
+  eager (`_db = OngTSDB()`) to lazy (`_db = None`). The helper is the
+  single point that constructs the `OngTSDB` instance on first use.
+  This is the exact block that the partial revert of `1eef9a7`
+  removed; re-adding it makes the 29 call sites resolvable again.
+  The 29 call sites themselves (which the partial revert left in
+  place) are correct and untouched.
+- **fix**: `OngTSDB.__init__` now bootstraps a fresh config file at
+  the requested `path` instead of the global `BASE_DIR`. The previous
+  implementation did `os.makedirs(BASE_DIR)` and `FileUtils()` with
+  defaults, which silently overwrote the user's actual database root
+  whenever a non-default `path` was passed (e.g. from a test fixture
+  or a script pointing at a per-project data dir). Replaced with
+  `os.makedirs(path, exist_ok=True)` and a `self.FU`-rooted config
+  write. The error was masked by the `_get_db` failure (which fired
+  first) but became visible the moment `_get_db` was restored.
+  (`src/ong_tsdb/database.py`)
+- **test**: added `tests/test_server_module_layout.py` with three
+  smoke tests that pin the lazy-init invariants at import time:
+    1. `ong_tsdb.server._get_db` is defined and callable.
+    2. The module-level `_db` is `None` (i.e. lazy, not eager).
+    3. `_get_db()` constructs `OngTSDB` exactly once and caches the
+       instance in the module-level `_db`.
+  These would have failed at CI time on any future partial revert of
+  the lazy-init refactor. (`tests/test_server_module_layout.py`)
+
+**No public API change.** Wire format, on-disk format, route paths,
+and HTTP behaviour are unchanged relative to 0.9.1.
+
+**What this release does NOT do.** The 0.9.0 release also added a
+large corruption-resilience feature set (`verify`, `repair`, chunk
+checksums, gevent-aware HTTP, dedicated unit tests, and the
+`COMPRESSION_ZSTD` default for new chunks). Most of that work was
+removed from `master` by the partial revert and is **not** restored
+by 0.9.2. This release only recovers the runtime behaviour that makes
+`/influx` ingest data again. If you depend on the verify/repair CLI
+or on zstd compression for new chunks, that work is tracked
+separately and has not been re-merged at the time of 0.9.2.
+
 ### 0.9.1
 - **fix**: `POST /influx` and `POST /influx_binary` raised `NameError:
   name 'metrics_get_db' is not defined` on every row. The bug was
