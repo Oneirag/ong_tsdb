@@ -421,3 +421,23 @@ Once you have confirmed the data looks right, the `.corrupt.bak` files
 can be removed with a simple
 `find BASE_DIR -name "*.corrupt.bak" -delete`.
 
+## Changelog
+
+### 0.9.1
+- **fix**: `POST /influx` and `POST /influx_binary` raised `NameError:
+  name 'metrics_get_db' is not defined` on every row. The bug was
+  introduced by the lazy `OngTSDB` initialization refactor in 0.9.0,
+  where a mass rename of the private `_db` symbol to `_get_db()`
+  accidentally corrupted the local `metrics_db` variable inside
+  `write_point_list`. Restored to the pre-refactor behaviour; no
+  public API change. (`src/ong_tsdb/server.py:289`)
+- **test**: added `tests/test_write_point_list.py` with regression
+  tests for `write_point_list` and the `/influx` endpoint, so this
+  regression cannot reappear silently.
+
+### 0.9.0
+- Default chunk compression switched from gzip to zstd (~25% better
+  ratio, 4-12x faster compress/decompress on representative data).
+  Old gzip chunks continue to read transparently and migrate as they
+  are rewritten.
+

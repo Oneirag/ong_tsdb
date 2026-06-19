@@ -286,9 +286,7 @@ def write_point_list(key: str, point_list: list, fill_value: float = 0) -> None:
             for idx, (dt_metrics, dt_values) in enumerate(
                 zip(data_metrics, data_values)
             ):
-                np_values[idx, [metrics_get_db().index(m) for m in dt_metrics]] = (
-                    dt_values
-                )
+                np_values[idx, [metrics_db.index(m) for m in dt_metrics]] = dt_values
             np_ts = np.array(metrics_ts)
             _get_db().write_tick_numpy(
                 key, db_meter_data.db, db_meter_data.sensor, np_values, np_ts
