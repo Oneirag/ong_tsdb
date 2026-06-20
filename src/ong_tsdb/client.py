@@ -1,5 +1,7 @@
 import base64
+import gzip
 import time
+import weakref
 import zlib
 
 import msgpack
@@ -12,16 +14,41 @@ from urllib3.exceptions import MaxRetryError, TimeoutError, ConnectionError
 
 from ong_tsdb import config, logger, LOCAL_TZ, DTYPE, HTTP_COMPRESS_THRESHOLD
 from ong_tsdb.check_versions import check_version_and_raise
-from ong_tsdb.exceptions import OngTsdbClientBaseException, NotAuthorizedException, ProxyNotAuthorizedException, \
-    ServerDownException, WrongAddressException
+from ong_tsdb.exceptions import (
+    OngTsdbClientBaseException,
+    NotAuthorizedException,
+    ProxyNotAuthorizedException,
+    ServerDownException,
+    WrongAddressException,
+)
 
 timer = OngTimer(False)
 
+_local_db = None
+
+
+def _get_local_db():
+    global _local_db
+    if _local_db is None:
+        from ong_tsdb.database import OngTSDB
+
+        _local_db = OngTSDB()
+    return _local_db
+
 
 class OngTsdbClient:
-
-    def __init__(self, url: str, token: str, retry_total=20, retry_connect=None, retry_backoff_factor=.2,
-                 proxy_auth_body: dict = None, validate_server_version: bool = True, **kwargs):
+    def __init__(
+        self,
+        url: str,
+        token: str,
+        retry_total=20,
+        retry_connect=None,
+        retry_backoff_factor=0.2,
+        proxy_auth_body: dict = None,
+        validate_server_version: bool = True,
+        auto_connect: bool = True,
+        **kwargs,
+    ):
         """
         Initializes client. It needs just an url (that includes port, parameter port is kept for backward compatibility
          but it is not used anymore) and a token.
@@ -36,6 +63,8 @@ class OngTsdbClient:
         server with authentication, this is the body to be posted to the login page)
         :param validate_server_version: True (default) to validate that the version of the server is greater or equal
          than the same as the client to raise a WrongVersionException, False otherwise
+        :param auto_connect: if True (default), calls connect() to verify the server is reachable.
+            Set to False to defer connection to first actual request.
         """
         self.validate_server_version = validate_server_version
         if proxy_auth_body is None:
@@ -51,21 +80,37 @@ class OngTsdbClient:
         self.token = token
         self.headers = {"Content-Type": "application/json"}
         self.update_token(self.token)
-        self.http = create_pool_manager(total=retry_total, connect=retry_connect, backoff_factor=retry_backoff_factor)
-        # Force reload configuration, that also serves as a connection test to make sure server is running
+        self.http = create_pool_manager(
+            total=retry_total,
+            connect=retry_connect,
+            backoff_factor=retry_backoff_factor,
+        )
+        weakref.finalize(self, self.http.clear)
+        if auto_connect:
+            self.connect()
+
+    def connect(self):
+        """Establish connection to the server and handle proxy authentication if needed.
+
+        This performs a config reload as a connection test and negotiates
+        proxy auth when the server is behind an auth proxy. Safe to call
+        multiple times (subsequent calls are no-ops once connected).
+        """
         for attempt in range(2):
             try:
-                res = self.config_reload()
+                self.config_reload()
                 break
             except NotAuthorizedException:
                 pass  # Not important
                 break
             except ProxyNotAuthorizedException as pnae:
-                """Needs to send proxy authentication. 
+                """Needs to send proxy authentication.
                 It will only be sent if server responds with application/json
                 Response body will be compose of form field received from server (if any) updated with
                 the proxy_auth_body dictionary"""
-                if pnae.response.headers.get("content-type").startswith("application/json"):
+                if pnae.response.headers.get("content-type").startswith(
+                    "application/json"
+                ):
                     js_resp = ujson.loads(pnae.response.data)
                     url = js_resp.get("url")
                     body = js_resp.get("form", dict())
@@ -73,9 +118,19 @@ class OngTsdbClient:
                     # body = ujson.dumps(self.proxy_auth_body)
                     cookies = get_cookies(pnae.response)
                     headers = dict(**self.headers, **cookies2header(cookies))
-                    res = self.http.request("POST", self._make_url(url), headers=headers, body=ujson.dumps(body))
-                    if res.data and res.headers.get("content-type").startswith("application/json") \
-                            and ujson.loads(res.data).get("http_code") == 200:
+                    res = self.http.request(
+                        "POST",
+                        self._make_url(url),
+                        headers=headers,
+                        body=ujson.dumps(body),
+                    )
+                    if (
+                        res.data
+                        and res.headers.get("content-type").startswith(
+                            "application/json"
+                        )
+                        and ujson.loads(res.data).get("http_code") == 200
+                    ):
                         cookies = get_cookies(res)
                         self.headers.update(cookies2header(cookies))
                     else:
@@ -83,8 +138,10 @@ class OngTsdbClient:
                         raise pnae
                     continue
                 else:
-                    logger.debug(f"Proxy auth response not understood, needs a json with form and url fields. "
-                                 f"Received {pnae.response.data}")
+                    logger.debug(
+                        f"Proxy auth response not understood, needs a json with form and url fields. "
+                        f"Received {pnae.response.data}"
+                    )
                     raise pnae
             except (ServerDownException, WrongAddressException):
                 break
@@ -92,7 +149,7 @@ class OngTsdbClient:
     def update_token(self, token):
         """Allows changing token of an already created client"""
         self.token = token
-        self.headers.update(urllib3.make_headers(basic_auth=f'token:{self.token}'))
+        self.headers.update(urllib3.make_headers(basic_auth=f"token:{self.token}"))
 
     def _request(self, method, url, *args, **kwargs):
         """Execute request adding token to header. Raises Exception if unauthorized.
@@ -102,25 +159,32 @@ class OngTsdbClient:
         :param *args: optional arguments for urlopen
         :param **kwargs: optional arguments for urlopen
         """
-        if 'headers' in kwargs:
-            kwargs['headers'].update(self.headers)
+        if "headers" in kwargs:
+            kwargs["headers"].update(self.headers)
         else:
-            kwargs['headers'] = self.headers
+            kwargs["headers"] = self.headers
         retval = None
         try:
             retval = self.http.request(method, url, *args, **kwargs)
-            # retval = self.http.urlopen(method, url, *args, **kwargs)
-        except OngTsdbClientBaseException as e:
-            logger.exception(e)
-            return None
+        except OngTsdbClientBaseException:
+            # Application-level errors (auth, 404, etc.) propagate so
+            # callers like exist_db can distinguish "not found" from
+            # other failures.
+            raise
         except (ConnectionError, MaxRetryError, TimeoutError):
             logger.error(f"Cannot connect to {url}")
-            raise ServerDownException(f"Cannot connect to server in address={url}, check if server is running or server"
-                                      f" url={self.server_url} used in constructor is correct and includes port ")
-        except Exception as e:
-            logger.exception(e)
-            logger.exception(f"Error reading {url}. Maybe server is down")
-            return None
+            raise ServerDownException(
+                f"Cannot connect to server in address={url}, check if server is running or server"
+                f" url={self.server_url} used in constructor is correct and includes port "
+            )
+        except Exception:
+            # Truly unexpected (e.g. malformed URL, urllib3 bug): log and
+            # propagate so the caller can decide. We no longer swallow
+            # these into None, which used to make exist_db / exist_sensor
+            # / delete_db / delete_sensor silently return False on any
+            # error.
+            logger.exception(f"Unexpected error reading {url}")
+            raise
         # Check retval
         if retval:
             if retval.status == 401:
@@ -129,10 +193,15 @@ class OngTsdbClient:
                     if js_res.get("http_code") == 407:
                         raise ProxyNotAuthorizedException(
                             f"Unauthorized, you need to set up a user and password for the proxy",
-                            response=retval)
-                raise NotAuthorizedException(f"Unauthorized, your token '{self.token}' is invalid for {url}")
+                            response=retval,
+                        )
+                raise NotAuthorizedException(
+                    f"Unauthorized, your token '{self.token}' is invalid for {url}"
+                )
             if retval.status == 407:
-                raise ProxyNotAuthorizedException(f"Unauthorized, you need to set up a user and password for the proxy")
+                raise ProxyNotAuthorizedException(
+                    f"Unauthorized, you need to set up a user and password for the proxy"
+                )
             elif retval.status == 404:
                 raise WrongAddressException(f"Error 404 in {url}")
         return retval
@@ -170,21 +239,25 @@ class OngTsdbClient:
         """Executes a put request, returning true if success. If gzip=False data is not sent gzipped"""
         do_gzip = kwargs.pop("gzip", True)
         if "body" in kwargs:
-            body = kwargs['body']
+            body = kwargs["body"]
             if do_gzip and len(body) > HTTP_COMPRESS_THRESHOLD:
-                kwargs['headers'] = {'content-encoding': 'gzip'}
+                kwargs["headers"] = {"content-encoding": "gzip"}
                 timer.tic("Gzipping body")
-                kwargs['body'] = zlib.compress(body)
+                kwargs["body"] = gzip.compress(body)
                 timer.toc("Gzipping body")
         success, json = self._post_retval(*args, **kwargs)
         return success
 
     def exist_db(self, database: str) -> bool:
-        """Returns True if database exists"""
+        """Returns True if database exists.
+
+        Other errors (auth, network, ...) are propagated so the caller
+        can distinguish "not found" from "could not determine".
+        """
         try:
-            res = self._request("get", self._make_url(f"/db/{database}"))
+            self._request("get", self._make_url(f"/db/{database}"))
             return True
-        except:
+        except WrongAddressException:
             return False
 
     def create_db(self, database) -> bool:
@@ -192,23 +265,35 @@ class OngTsdbClient:
         return self._post(self._make_url("/db/") + database)
 
     def delete_db(self, database: str) -> bool:
-        """Returns True if database could be deleted"""
+        """Returns True if database could be deleted.
+
+        Other errors (auth, network, ...) are propagated.
+        """
         try:
-            res = self._request("delete", self._make_url(f"/db/{database}"))
+            self._request("delete", self._make_url(f"/db/{database}"))
             return True
-        except:
+        except WrongAddressException:
             return False
 
     def exist_sensor(self, database: str, sensor: str) -> bool:
-        """Returns True if sensor exists"""
+        """Returns True if sensor exists. Other errors propagate."""
         try:
-            res = self._request("get", self._make_url(f"/db/{database}/sensor/{sensor}"))
+            self._request("get", self._make_url(f"/db/{database}/sensor/{sensor}"))
             return True
-        except:
+        except WrongAddressException:
             return False
 
-    def create_sensor(self, database, sensor, period, metrics, read_key, write_key, metadata=None,
-                      level_names=None) -> bool:
+    def create_sensor(
+        self,
+        database,
+        sensor,
+        period,
+        metrics,
+        read_key,
+        write_key,
+        metadata=None,
+        level_names=None,
+    ) -> bool:
         """
         Creates a sensor in a database
         :param database: database name
@@ -223,19 +308,30 @@ class OngTsdbClient:
         :return: True on success
         """
         if metadata is not None and not isinstance(metadata, dict):
-            raise ValueError(f"Wrong metadata type, it must be a dict. Passed metadata={metadata}")
+            raise ValueError(
+                f"Wrong metadata type, it must be a dict. Passed metadata={metadata}"
+            )
         if level_names:
             metadata = metadata or dict()
-            metadata['level_names'] = level_names
-        data = dict(period=period, metrics=metrics, write_key=write_key, read_key=read_key, metadata=metadata)
-        return self._post(self._make_url(f"/db/{database}/sensor/{sensor}"), body=ujson.dumps(data).encode())
+            metadata["level_names"] = level_names
+        data = dict(
+            period=period,
+            metrics=metrics,
+            write_key=write_key,
+            read_key=read_key,
+            metadata=metadata,
+        )
+        return self._post(
+            self._make_url(f"/db/{database}/sensor/{sensor}"),
+            body=ujson.dumps(data).encode(),
+        )
 
     def delete_sensor(self, database: str, sensor: str) -> bool:
-        """Returns True if sensor could be deleted"""
+        """Returns True if sensor could be deleted. Other errors propagate."""
         try:
-            res = self._request("delete", self._make_url(f"/db/{database}/sensor/{sensor}"))
+            self._request("delete", self._make_url(f"/db/{database}/sensor/{sensor}"))
             return True
-        except:
+        except WrongAddressException:
             return False
 
     def write(self, sequence: list, fill_value=0) -> bool:
@@ -254,13 +350,18 @@ class OngTsdbClient:
         timer.tic("total post execution")
         if sequence:
             if isinstance(sequence[0], str):
-                return self._post(self._make_url(f"/influx{fill_value}"), body="\n".join(sequence).encode())
+                return self._post(
+                    self._make_url(f"/influx{fill_value}"),
+                    body="\n".join(sequence).encode(),
+                )
             elif isinstance(sequence[0], (list, tuple)):
                 timer.tic("Using msgpack")
                 body = msgpack.dumps(sequence)
                 timer.toc("Using msgpack")
 
-                retval = self._post(self._make_url(f"/influx_binary{fill_value}"), body=body, gzip=False)
+                retval = self._post(
+                    self._make_url(f"/influx_binary{fill_value}"), body=body, gzip=False
+                )
                 timer.toc("total post execution")
                 return retval
             else:
@@ -268,16 +369,16 @@ class OngTsdbClient:
         else:
             return False
 
-    def write_df(self, db: str, sensor: str, df, fill_value=0) -> bool:
+    def write_df(self, db: str, sensor: str, df: pd.DataFrame, fill_value=0) -> bool:
         """Writes a pandas dataframe into a certain database and sensor.
         Pandas data frame must be indexed by dates and have metrics/measurements as columns"""
-        # Check index
-        pass
-        # Generate a sequence out of the given data
-        sequence = []
-        for idx, row in df.iterrows():
-            sequence.append((db, sensor, list(row.index), list(row.values), idx.value))
-
+        columns = list(df.columns)
+        values = df.values.tolist()
+        timestamps = df.index.values.astype(np.int64).tolist()
+        sequence = [
+            (db, sensor, columns, row_values, ts)
+            for row_values, ts in zip(values, timestamps)
+        ]
         return self.write(sequence, fill_value=fill_value)
 
     def config_reload(self):
@@ -290,9 +391,11 @@ class OngTsdbClient:
 
     def get_lasttimestamp(self, db, sensor):
         """Returns last timestamp (millis) of data stored for a sensor in a db"""
-        success, json = self._post_retval(self._make_url(f"/{db}/{sensor}/last_timestamp"))
+        success, json = self._post_retval(
+            self._make_url(f"/{db}/{sensor}/last_timestamp")
+        )
         if success:
-            return json['last_timestamp']
+            return json["last_timestamp"]
         else:
             return None
 
@@ -307,7 +410,7 @@ class OngTsdbClient:
             if tz is None:
                 return utc_date
             else:
-                return utc_date.tz_convert("UTC").astimezone(tz)
+                return utc_date.tz_localize("UTC").tz_convert(tz)
 
     def get_metrics(self, db, sensor):
         """Returns list of metrics of a sensor"""
@@ -322,7 +425,9 @@ class OngTsdbClient:
         metadata = json.get("metadata", json)  # For retro compatibility
         return metadata if success else None
 
-    def read_grafana(self, db, sensor, date_from, date_to=None, metrics=None) -> pd.DataFrame:
+    def read_grafana(
+        self, db, sensor, date_from, date_to=None, metrics=None
+    ) -> pd.DataFrame:
         """
         Reads data from db and returns it as a pandas dataframe, using grafana endpoints.
         This is much slower than read, so it should not be used
@@ -338,23 +443,31 @@ class OngTsdbClient:
         metrics = metrics or self.get_metrics(db, sensor)
         date_to = date_to or pd.Timestamp.utcnow()
         data = {
-            "range": {
-                "from": date_from.isoformat(),
-                "to": date_to.isoformat()
-            },
+            "range": {"from": date_from.isoformat(), "to": date_to.isoformat()},
             "targets": [dict(target=t) for t in metrics],
         }
-        success, data = self._post_retval(self._make_url(f"/{db}/{sensor}/query"), body=ujson.dumps(data).encode())
+        success, data = self._post_retval(
+            self._make_url(f"/{db}/{sensor}/query"), body=ujson.dumps(data).encode()
+        )
         if not success:
             return None
-        targets = [d['target'] for d in data]
-        dp_idx = [[pd.Timestamp.utcfromtimestamp(d1[1] / 1e3).tz_localize("UTC").astimezone(LOCAL_TZ) for d1 in
-                   d['datapoints']] for d in data]
-        dp_val = [[d1[0] for d1 in d['datapoints']] for d in data]
+        targets = [d["target"] for d in data]
+        dp_idx = [
+            [
+                pd.Timestamp.utcfromtimestamp(d1[1] / 1e3)
+                .tz_localize("UTC")
+                .astimezone(LOCAL_TZ)
+                for d1 in d["datapoints"]
+            ]
+            for d in data
+        ]
+        dp_val = [[d1[0] for d1 in d["datapoints"]] for d in data]
         df = pd.DataFrame(np.array(dp_val).T, columns=targets, index=dp_idx[0])
         return df
 
-    def local_read(self, db, sensor, date_from, date_to=None, metrics=None) -> pd.DataFrame:
+    def local_read(
+        self, db, sensor, date_from, date_to=None, metrics=None
+    ) -> pd.DataFrame:
         """
         Reads data from db and returns it as a pandas dataframe. Reads it from a local database not using server,
         so it won't work if database is not hosted in localhost
@@ -367,10 +480,11 @@ class OngTsdbClient:
         :return: a pandas dataframe
         """
         # This local import avoid problems when just needing remote client in windows
-        from ong_tsdb.database import OngTSDB
-        _db = OngTSDB()
+        _db = _get_local_db()
         end_ts = date_to.timestamp() if date_to else None
-        data = _db.read(self.token, db, sensor, start_ts=date_from.timestamp(), end_ts=end_ts)
+        data = _db.read(
+            self.token, db, sensor, start_ts=date_from.timestamp(), end_ts=end_ts
+        )
         df = _db.np2pd(self.token, db, sensor, data[0], data[1])
         if metrics:
             df = df.loc[:, metrics]
@@ -381,12 +495,21 @@ class OngTsdbClient:
         Sets level_names for a sensor (must exist previously)
         """
         metadata = self.get_metadata(db, sensor) or dict()
-        metadata['level_names'] = level_names
-        res = self._post(self._make_url(f"/db/{db}/sensor/{sensor}/set_metadata"), body=ujson.dumps(metadata))
+        metadata["level_names"] = level_names
+        res = self._post(
+            self._make_url(f"/db/{db}/sensor/{sensor}/set_metadata"),
+            body=ujson.dumps(metadata),
+        )
         return res
 
-    def read(self, db, sensor, date_from: pd.Timestamp, date_to: pd.Timestamp = None,
-             metrics: list = None) -> pd.DataFrame:
+    def read(
+        self,
+        db,
+        sensor,
+        date_from: pd.Timestamp,
+        date_to: pd.Timestamp = None,
+        metrics: list = None,
+    ) -> pd.DataFrame:
         """
         Reads data from db and returns it as a pandas dataframe.
         Index is converted to the same TZ as date_from (if no TZ then naive dates are returned)
@@ -402,13 +525,18 @@ class OngTsdbClient:
         end_ts = date_to.timestamp() if date_to else None
         # metrics = ",".join(metrics) if metrics else None
 
-        body = ujson.dumps(dict(
-            start_ts=date_from.timestamp(),
-            end_ts=end_ts,
-        ))
+        body = ujson.dumps(
+            dict(
+                start_ts=date_from.timestamp(),
+                end_ts=end_ts,
+            )
+        )
 
-        success, js_resp = self._post_retval(self._make_url(f"/{db}/{sensor}/read_df"), body=body,
-                                             headers={"Content-Encoding": "gzip"})
+        success, js_resp = self._post_retval(
+            self._make_url(f"/{db}/{sensor}/read_df"),
+            body=body,
+            headers={"Content-Encoding": "gzip"},
+        )
         # len of dates is the key of the json, value contains concatenated bytes of dates and values
         if not success:
             return None
@@ -428,9 +556,11 @@ class OngTsdbClient:
         values = np.frombuffer(bts[dates_len:], dtype=DTYPE)
         # metrics_db = self.get_metrics(db, sensor)
         if date_from.tz:
-            dateindex = pd.to_datetime(dates, unit='s', utc=True).tz_convert(date_from.tz)
+            dateindex = pd.to_datetime(dates, unit="s", utc=True).tz_convert(
+                date_from.tz
+            )
         else:
-            dateindex = pd.to_datetime(dates, unit='s')
+            dateindex = pd.to_datetime(dates, unit="s")
         if len(values) > 0:
             values.shape = len(dates), int(values.shape[0] / len(dates))
         else:
@@ -439,24 +569,3 @@ class OngTsdbClient:
         if metrics is not None:
             df = df.loc[:, metrics]
         return df
-
-    def __del__(self):
-        """Forces http pool manager to be cleared (to avoid warning in unittest)"""
-        self.http.clear()
-
-
-if __name__ == '__main__':
-    client = OngTsdbClient(url=config('url'), port=config('port'), token=config('admin_token'))
-    print(client.create_db("ejemplo"))
-    print(client.create_sensor("ejemplo", "sensor1", "1s", ["active", "reactive"], write_key=config('write_token'),
-                               read_key=config('read_token')))
-    client = OngTsdbClient(url=config('url'), port=config('port'), token=config('write_token'))
-    while True:
-        ts = time.time_ns()
-        client.write([f"ejemplo,circuit=sensor1 active=9,reactive=10 {ts}",
-                      f"ejemplo,circuit=sensor1 active=11 {ts}",
-                      f"ejemplo,circuit=sensor1 reactive=12 {ts}",
-                      f"ejemplo,circuit=sensor1 reactive=13,active=14 {ts}",
-                      f"ejemplo,circuit=sensor1 reactive=15,active=16,nueva=17 {ts}",
-                      ])
-        time.sleep(1)
