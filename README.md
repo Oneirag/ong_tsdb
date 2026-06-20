@@ -456,14 +456,36 @@ to the post-0.9.0 design intent.
   write. The error was masked by the `_get_db` failure (which fired
   first) but became visible the moment `_get_db` was restored.
   (`src/ong_tsdb/database.py`)
-- **test**: added `tests/test_server_module_layout.py` with three
-  smoke tests that pin the lazy-init invariants at import time:
+- **fix**: every remaining `_db.xxx(...)` call site in
+  `src/ong_tsdb/server.py` is now `_get_db().xxx(...)`. The partial
+  revert of the lazy-init refactor left 25 call sites on the bare
+  `_db` global while only ~4 had been renamed to `_get_db()`. After
+  the helper was re-added, those bare references still resolved
+  (the name exists) but pointed at `None` (the lazy initial state),
+  so the first request to any of them raised
+  `AttributeError: 'NoneType' object has no attribute 'X'` and
+  returned HTTP 500 — including, importantly, the grafana `/query`
+  endpoint and several other read paths that the previous fix
+  did not exercise. The 25 sites have been mechanically rewritten
+  in place; the only remaining mentions of `_db` in the file are
+  inside the lazy-init helper itself.
+- **test**: `tests/test_server_module_layout.py` now contains five
+  smoke tests that pin the lazy-init contract end to end:
     1. `ong_tsdb.server._get_db` is defined and callable.
-    2. The module-level `_db` is `None` (i.e. lazy, not eager).
+    2. The module-level `_db` is `None` at import time (lazy, not
+       eager).
     3. `_get_db()` constructs `OngTSDB` exactly once and caches the
        instance in the module-level `_db`.
-  These would have failed at CI time on any future partial revert of
-  the lazy-init refactor. (`tests/test_server_module_layout.py`)
+    4. **Static check**: no source line outside the lazy-init helper
+       references the bare `_db` global. The check locates the
+       helper block by its `_db = None` ... `return _db` markers and
+       rejects any other mention. This would have caught the bare
+       `_db.xxx()` regression at CI time.
+    5. **HTTP regression**: a real `POST` to the grafana `/query`
+       endpoint (the path that produced
+       `AttributeError: 'NoneType' object has no attribute
+       'get_metrics'` in production) must not return 500 and must
+       not mention `NoneType` in the body.
 
 **No public API change.** Wire format, on-disk format, route paths,
 and HTTP behaviour are unchanged relative to 0.9.1.

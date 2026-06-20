@@ -96,7 +96,7 @@ def resource_not_found(e):
 @auth_required
 def config_reload(key):
     """Reloads configuration just in case any external change happened. Currently, no token is required"""
-    _db.config_reload()
+    _get_db().config_reload()
     return make_js_response("Configuration refreshed OK")
 
 
@@ -110,10 +110,10 @@ def hello():
 @auth_required
 def create_db(database, key):
     """Creates a new database (returns 406 if database already existed) """
-    if _db.exist_db(key, database):
+    if _get_db().exist_db(key, database):
         return make_js_response(f"Database {database} already exists", 406)
     else:
-        _db.create_db(key, database)
+        _get_db().create_db(key, database)
         return make_js_response(f"Database {database} created ok", 201)
 
 
@@ -121,8 +121,8 @@ def create_db(database, key):
 @auth_required
 def delete_db(database, key):
     """Deletes a database (returns 404 if database not existed)"""
-    if _db.exist_db(key, database):
-        _db.delete_db(key, database)
+    if _get_db().exist_db(key, database):
+        _get_db().delete_db(key, database)
         return make_js_response(f"Database {database} deleted", 200)
     else:
         return make_js_response(f"Database {database} was not found", 404)
@@ -132,7 +132,7 @@ def delete_db(database, key):
 @auth_required
 def exists_db(database, key):
     """Checks if database exists, returning 200 if exists and 404 otherwise"""
-    if _db.exist_db(key, database):
+    if _get_db().exist_db(key, database):
         return make_js_response(f"Database {database} exists", 200)
     else:
         return make_js_response(f"Database {database} does not exist", 404)
@@ -142,10 +142,10 @@ def exists_db(database, key):
 @auth_required
 def create_sensor(database, sensor, key):
     """Creates a new sensor in database (returns 406 if sensor already existed) """
-    if _db.exist_sensor(key, database, sensor):
+    if _get_db().exist_sensor(key, database, sensor):
         return make_js_response(f"Sensor {sensor} already exists in Database {database}", 406)
     else:
-        _db.create_sensor(key, database, sensor, **request.json)
+        _get_db().create_sensor(key, database, sensor, **request.json)
         return make_js_response(f"Sensor {sensor} created ok in database {database} ", 201)
 
 
@@ -153,8 +153,8 @@ def create_sensor(database, sensor, key):
 @auth_required
 def delete_sensor(database, sensor, key):
     """Deletes a sensor in database (returns 404 if sensor did not exist) """
-    if _db.exist_sensor(key, database, sensor):
-        _db.delete_sensor(key, database, sensor)
+    if _get_db().exist_sensor(key, database, sensor):
+        _get_db().delete_sensor(key, database, sensor)
         return make_js_response(f"Sensor {sensor} in Database {database} deleted", 200)
     else:
         return make_js_response(f"Sensor {sensor} or Database {database} not found", 404)
@@ -164,7 +164,7 @@ def delete_sensor(database, sensor, key):
 @auth_required
 def exists_sensor(database, sensor, key):
     """Check if sensor exists in database, return 200 if exist and returns 404 otherwise"""
-    if _db.exist_sensor(key, database, sensor):
+    if _get_db().exist_sensor(key, database, sensor):
         return make_js_response(f"Sensor {sensor} and database {database} exist")
     else:
         return make_js_response(f"Sensor {sensor} or database {database} do not exists", 404)
@@ -174,9 +174,9 @@ def exists_sensor(database, sensor, key):
 @auth_required
 def set_metadata(database, sensor, key):
     """Sets metadata for a sensor, returning 503 exception if something was wrong"""
-    if _db.exist_sensor(key, database, sensor):
+    if _get_db().exist_sensor(key, database, sensor):
         new_metadata = ujson.loads(request.data)
-        _db.update_metadata(key, database, sensor, new_metadata)
+        _get_db().update_metadata(key, database, sensor, new_metadata)
         return make_js_response(f"sensor={sensor} in database={database} configuration changed ok", 200)
     else:
         return make_js_response(f"sensor={sensor} did not exist in database={database} ", 404)
@@ -197,8 +197,8 @@ def write_point_list(key: str, point_list: list, fill_value: float = 0) -> None:
         def __init__(self, key, db, sensor):
             self.db = db
             self.sensor = sensor
-            self.chunker = _db.get_chunker(key, db, sensor)
-            self.db_metrics = _db.get_metrics(key, db, sensor)
+            self.chunker = _get_db().get_chunker(key, db, sensor)
+            self.db_metrics = _get_db().get_metrics(key, db, sensor)
             self.new_metrics = list()
             self.timestamps = dict()
             self.data_metrics = dict()
@@ -254,7 +254,7 @@ def write_point_list(key: str, point_list: list, fill_value: float = 0) -> None:
             ):
                 np_values[idx, [metrics_db.index(m) for m in dt_metrics]] = dt_values
             np_ts = np.array(metrics_ts)
-            _db.write_tick_numpy(key, db_meter_data.db, db_meter_data.sensor, np_values, np_ts)
+            _get_db().write_tick_numpy(key, db_meter_data.db, db_meter_data.sensor, np_values, np_ts)
 
 
 def parse_fill_value(fill_value) -> float:
@@ -304,7 +304,7 @@ def write_point_bin(key, fill_value):
 @auth_required
 def get_lasttimestamp(db_name, sensor_name, key):
     """Returns a json with the last timestamp in the key 'last_timestamp'"""
-    return make_js_response(msg=None, last_timestamp=_db.get_last_timestamp(key, db_name, sensor_name))
+    return make_js_response(msg=None, last_timestamp=_get_db().get_last_timestamp(key, db_name, sensor_name))
 
 
 @app.route("/<db_name>/<sensor_name>/read_df", methods=["post"])
@@ -322,7 +322,7 @@ def read_df(db_name, sensor_name, key=None):
     end_ts = payload.get('end_ts', None)
 
     with time_it.context_manager("Reading data"):
-        dates, values = _db.read(key, db_name, sensor_name, start_ts=start_ts, end_ts=end_ts)
+        dates, values = _get_db().read(key, db_name, sensor_name, start_ts=start_ts, end_ts=end_ts)
 
     if dates is not None:
         with time_it.context_manager("Converting to bytes"):
@@ -330,8 +330,8 @@ def read_df(db_name, sensor_name, key=None):
             bytes_values = values.tobytes()
             encoded_numpy = encodebytes(bytes_dates + bytes_values)  # .decode()
         with time_it.context_manager("Reading metrics and metadata"):
-            metrics = _db.get_metrics(key, db_name, sensor_name)
-            metadata = _db.get_metadata(key, db_name, sensor_name)
+            metrics = _get_db().get_metrics(key, db_name, sensor_name)
+            metadata = _get_db().get_metadata(key, db_name, sensor_name)
         # return encoded_numpy and the list of metrics
         # if more than 1024 data, compress JUST DATA to send it faster if client headers asked for it
         compressed = len(bytes_dates) > HTTP_COMPRESS_THRESHOLD and request.headers.get("content-encoding",
@@ -356,7 +356,7 @@ def read_df(db_name, sensor_name, key=None):
 @auth_required
 def get_metadata(db_name, sensor_name, key=""):
     """Returns a JSON with the metadata of the db and sensor"""
-    metadata = _db.get_metadata(key, db_name, sensor_name)
+    metadata = _get_db().get_metadata(key, db_name, sensor_name)
     return make_js_response(msg=None, metadata=metadata)
 
 
@@ -384,14 +384,14 @@ def grafana_query_chunked(db_name, sensor_name, key=""):
         targets = [t['target'] for t in request.json['targets']]
         max_Datapoints = request.json.get('maxDataPoints')
         # print(f"{start_t=}, {end_t=}, {targets=}, {max_Datapoints=}")
-        metrics = _db.get_metrics(key, db_name, sensor_name, force_reload=True)
+        metrics = _get_db().get_metrics(key, db_name, sensor_name, force_reload=True)
         res = dict()
         for t in targets:
             res[t] = list()
         tick_time_spread = None if max_Datapoints is None else (end_t - start_t + 1) / float(max_Datapoints)
         # print(f"{tick_time_spread=}")
         n_data_read = 0
-        for dates, values, tick_duration in _db.read_iter(key,
+        for dates, values, tick_duration in _get_db().read_iter(key,
                                                           db_name, sensor_name,
                                                           start_t, end_t, step=tick_time_spread):
             # For very long time queries some chunks can be discarded
@@ -427,12 +427,12 @@ def grafana_query_chunked(db_name, sensor_name, key=""):
 @auth_required
 def grafana_search(db_name, sensor_name, key=""):
     """Returns a JSON with the metrics of the db and sensor"""
-    return jsonify(_db.get_metrics(key, db_name, sensor_name))
+    return jsonify(_get_db().get_metrics(key, db_name, sensor_name))
 
 
 @app.route("/get_md5/<filename>")
 def grafana_get_md5(filename):
-    return jsonify(_db.get_mdf5(filename))
+    return jsonify(_get_db().get_mdf5(filename))
 
 
 def main():
