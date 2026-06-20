@@ -423,6 +423,74 @@ can be removed with a simple
 
 ## Changelog
 
+### 0.9.3
+Restores the corruption-resilience feature set that the 0.9.0 release
+shipped and that the partial revert `9998159` (and the subsequent
+re-merge PR #29) wiped out from `master`. With 0.9.3 the runtime
+endpoints are no longer broken **and** the maintenance / migration
+tooling is back. The fix is a clean re-apply of the 0.9.0 work
+(`feat(compression)`, `fix: bounds-check chunk files, add verify CLI`,
+the `migrate` subcommand, the path-traversal fix on `/get_md5`,
+the consolidated exception hierarchy, the dedicated unit tests, and
+the `__main__.py` CLI) on top of the 0.9.2 runtime fixes.
+
+- **feat**: `python -m ong_tsdb verify [--db NAME] [--corrupt-only]
+  [--progress]` scans all chunks in `BASE_DIR` and exits non-zero if
+  any are corrupt. Reports missing deltas, size mismatches, and
+  bad checksums. (`src/ong_tsdb/__main__.py`, `src/ong_tsdb/fileutils.py`)
+- **feat**: `python -m ong_tsdb repair [--db NAME] [--no-backup]
+  [--dry-run]` repairs truncated chunks in place: reads the
+  recoverable rows, verifies their checksums, pads the missing tail
+  with `NaN`, and writes back atomically. Originals are preserved
+  at `<file>.corrupt.bak` unless `--no-backup` is given.
+- **feat**: `python -m ong_tsdb migrate [--db NAME] [--target
+  zstd|gzip|raw]` migrates chunk files between compression formats.
+  Default `--dry-run` previews; dropping it actually rewrites the
+  chunks. Skips chunks already in the target format. Refuses to
+  migrate a chunk with a bad checksum. (See `examples/migrate_chunks.py`.)
+- **feat**: dual-format read/write. New chunks are written with zstd
+  (the new default) but `.gz` chunks keep working transparently and
+  migrate as they are rewritten. Both `COMPRESSION_GZIP` and
+  `COMPRESSION_ZSTD` are exposed as named constants in
+  `ong_tsdb.__init__`. (`src/ong_tsdb/__init__.py`,
+  `src/ong_tsdb/fileutils.py`)
+- **fix**: `re_chunk_filename` is now anchored (`\Z`) and call sites
+  use `fullmatch`, so a renamed/rotated file (`1234.5.gz.bak`)
+  raises `ValueError` instead of silently parsing wrong metadata.
+  `np.full(shape, None, dtype=float)` (silently coerces to 0.0 on
+  numpy >= 2.0) is replaced with `np.nan` in the empty-chunk code
+  path. `write_tick_numpy` now reads existing chunks back with `DTYPE`
+  and raises `InvalidDataWriteException` on a size mismatch instead
+  of overwriting a possibly-truncated file. (These three were the
+  bugs that motivated the corruption-resilience work in the first
+  place.) (`src/ong_tsdb/fileutils.py`, `src/ong_tsdb/database.py`)
+- **fix**: path traversal on `/get_md5` is blocked: the route
+  requires auth, joins the requested filename under
+  `ong_tsdb._db.FU.base_path`, and rejects anything that escapes
+  it. (`src/ong_tsdb/server.py`)
+- **fix**: admin key is generated with `secrets.choice` (not
+  `random.sample`) and is printed to stdout exactly once with a
+  clear banner — never to a log file. (`src/ong_tsdb/database.py`)
+- **refactor**: exception classes (`NotAuthorizedException`,
+  `OngTsdbBaseException`, etc.) are now defined once in
+  `ong_tsdb.exceptions` and re-exported from `ong_tsdb.database` for
+  backward compatibility. (`src/ong_tsdb/exceptions.py`)
+- **test**: re-adds `tests/test_database.py`, `tests/test_fileutils.py`,
+  `tests/test_exceptions.py`, and `tests/test_client_unit.py` —
+  the dedicated unit tests for the corruption-resilience code paths,
+  with 13 new fileutils cases covering `extract_filename_parts`,
+  `fast_read_np` happy / corrupt / empty / dual-format paths,
+  `migrate_compression` round-trips, and a full
+  `migrate + verify_all_chunks` integration test. Also re-adds
+  `pytest.ini` and a `.github/workflows/ci.yml` GitHub Actions
+  workflow.
+- **deps**: `zstandard ~= 0.25.0` is now a required dep
+  (`requirements.txt`).
+
+**No public API change** beyond the new CLI subcommands. Wire
+format, on-disk format, route paths, and HTTP behaviour are
+unchanged relative to 0.9.1.
+
 ### 0.9.2
 This is a correctness release that closes two `NameError` holes that
 slipped through the 0.9.0 → 0.9.1 cycle because of a partial revert
@@ -489,32 +557,4 @@ to the post-0.9.0 design intent.
 
 **No public API change.** Wire format, on-disk format, route paths,
 and HTTP behaviour are unchanged relative to 0.9.1.
-
-**What this release does NOT do.** The 0.9.0 release also added a
-large corruption-resilience feature set (`verify`, `repair`, chunk
-checksums, gevent-aware HTTP, dedicated unit tests, and the
-`COMPRESSION_ZSTD` default for new chunks). Most of that work was
-removed from `master` by the partial revert and is **not** restored
-by 0.9.2. This release only recovers the runtime behaviour that makes
-`/influx` ingest data again. If you depend on the verify/repair CLI
-or on zstd compression for new chunks, that work is tracked
-separately and has not been re-merged at the time of 0.9.2.
-
-### 0.9.1
-- **fix**: `POST /influx` and `POST /influx_binary` raised `NameError:
-  name 'metrics_get_db' is not defined` on every row. The bug was
-  introduced by the lazy `OngTSDB` initialization refactor in 0.9.0,
-  where a mass rename of the private `_db` symbol to `_get_db()`
-  accidentally corrupted the local `metrics_db` variable inside
-  `write_point_list`. Restored to the pre-refactor behaviour; no
-  public API change. (`src/ong_tsdb/server.py:289`)
-- **test**: added `tests/test_write_point_list.py` with regression
-  tests for `write_point_list` and the `/influx` endpoint, so this
-  regression cannot reappear silently.
-
-### 0.9.0
-- Default chunk compression switched from gzip to zstd (~25% better
-  ratio, 4-12x faster compress/decompress on representative data).
-  Old gzip chunks continue to read transparently and migrate as they
-  are rewritten.
 
